@@ -80,7 +80,9 @@ export default function App() {
   });
   const [tool, setTool] = useState(1);
   const [mirror, setMirror] = useState(true);
-  const [log, setLog] = useState(["Ready. Put the pendant in Pair mode (MID on Home), then tap Connect Bluetooth."]);
+  const [log, setLog] = useState([
+    "Ready. Put the pendant in Pair mode (MID on Home), then tap Connect Bluetooth.",
+  ]);
   const [codeIn, setCodeIn] = useState("");
   const [connected, setConnected] = useState(false);
   const [deviceName, setDeviceName] = useState("");
@@ -147,16 +149,38 @@ export default function App() {
   const stop = () => { drawing.current = false; last.current = null; };
 
   const connectBT = async () => {
-    try {
-      addLog("Scanning... (pendant must be in Pair mode)");
-      const device = await navigator.bluetooth.requestDevice({
-        filters: [{ services: [AVATAR_SERVICE_UUID] }],
-        optionalServices: [AVATAR_SERVICE_UUID],
-      });
+    const tryOnce = async (options, label) => {
+      addLog(`Scanning (${label})... pendant must be on the PAIRING screen`);
+      const device = await navigator.bluetooth.requestDevice(options);
       addLog("Found: " + (device.name || "(unnamed)"));
       const server = await device.gatt.connect();
       const service = await server.getPrimaryService(AVATAR_SERVICE_UUID);
       const ch = await service.getCharacteristic(AVATAR_CHAR_UUID);
+      return { device, ch };
+    };
+
+    try {
+      let r;
+      try {
+        r = await tryOnce(
+          {
+            filters: [{ services: [AVATAR_SERVICE_UUID] }],
+            optionalServices: [AVATAR_SERVICE_UUID],
+          },
+          "by service UUID"
+        );
+      } catch (err) {
+        if (err.name !== "NotFoundError") throw err;
+        addLog("Nothing matched the UUID filter - trying name prefix...");
+        r = await tryOnce(
+          {
+            filters: [{ namePrefix: "CoolTown" }],
+            optionalServices: [AVATAR_SERVICE_UUID],
+          },
+          "by name prefix"
+        );
+      }
+      const { device, ch } = r;
       btDeviceRef.current = device;
       btCharRef.current = ch;
       device.addEventListener("gattserverdisconnected", () => {
@@ -170,7 +194,10 @@ export default function App() {
       addLog("Connected via Bluetooth.");
     } catch (err) {
       if (err.name === "NotFoundError") {
-        addLog("No pendant found. Make sure you pressed MID on the Home screen first (Pair mode).");
+        addLog(
+          "No pendant found. Check: (1) pendant shows PAIRING with the blinking square, " +
+          "(2) phone Bluetooth is on, (3) Chrome on Android, (4) the site is HTTPS."
+        );
       } else {
         addLog("BT connect failed: " + err.message);
       }
@@ -231,8 +258,9 @@ export default function App() {
 
         <div className="hint" style={{ marginBottom: 16 }}>
           <b>How to send:</b> on the pendant, press <b>MID</b> on the Home
-          screen to enter <b>Pair mode</b>, then tap <b>Connect Bluetooth</b>
-          here and pick the pendant from the list.
+          screen (or on Avatars with no avatar yet) so the display shows{" "}
+          <b>PAIRING…</b> with a blinking square, then tap{" "}
+          <b>Connect Bluetooth</b> here and pick the pendant from the list.
         </div>
 
         <div className="row">
@@ -243,7 +271,11 @@ export default function App() {
               width={N * CELL}
               height={N * CELL}
               onContextMenu={(e) => e.preventDefault()}
-              onPointerDown={(e) => { drawing.current = true; e.currentTarget.setPointerCapture(e.pointerId); paint(e); }}
+              onPointerDown={(e) => {
+                drawing.current = true;
+                e.currentTarget.setPointerCapture(e.pointerId);
+                paint(e);
+              }}
               onPointerMove={(e) => drawing.current && paint(e)}
               onPointerUp={stop}
               onPointerCancel={stop}
@@ -266,29 +298,41 @@ export default function App() {
             <div className="lbl">Pendant</div>
             {!btOk && (
               <div className="note">
-                This browser doesn't support Web Bluetooth. On iOS this is
-                never available — try Chrome on Android or a desktop
-                (Chrome/Edge). You can still design an avatar here and use
-                <b> Copy link</b> / <b>Copy code</b> to move it.
+                This browser doesn't support Web Bluetooth. On Samsung you need
+                <b> Chrome</b> (Samsung Internet won't work). Open this page in
+                Chrome, make sure the site is served over HTTPS, and grant the
+                Nearby Devices / Bluetooth permission when asked.
               </div>
             )}
             {!connected
-              ? <button className="go" onClick={connectBT} disabled={!btOk}>Connect Bluetooth</button>
-              : <>
+              ? (
+                <button className="go" onClick={connectBT} disabled={!btOk}>
+                  Connect Bluetooth
+                </button>
+              )
+              : (
+                <>
                   <button className="go" onClick={send}>Send to pendant</button>
                   <button onClick={disconnectBT}>Disconnect</button>
                   <div style={{ fontSize: 12, color: "var(--mute)" }}>
                     Connected: {deviceName}
                   </div>
-                </>}
+                </>
+              )}
 
             <div className="lbl">Move between devices</div>
             <div className="tools">
               <button onClick={() => copy(link, "link")}>Copy link</button>
               <button onClick={() => copy(code, "code")}>Copy code</button>
             </div>
-            <input value={codeIn} onChange={(e) => setCodeIn(e.target.value)}
-              placeholder="Paste a code or link" autoCapitalize="off" autoCorrect="off" spellCheck={false} />
+            <input
+              value={codeIn}
+              onChange={(e) => setCodeIn(e.target.value)}
+              placeholder="Paste a code or link"
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
+            />
             <button onClick={loadCode} disabled={!codeIn}>Load</button>
           </div>
         </div>
