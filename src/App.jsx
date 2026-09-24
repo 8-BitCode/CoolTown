@@ -152,7 +152,11 @@ export default function App() {
       setConnected(true);
       addLog("Connected.");
       readLoop(port);
-    } catch (err) { addLog("Connect failed: " + err.message); }
+    } catch (err) {
+      addLog("Connect failed: " + err.message);
+      if (err.name === "NotFoundError")
+        addLog("If the device list was empty, this browser can't see the pendant's USB chip (common on phones). Use a laptop with Chrome/Edge: tap Copy link and open it there.");
+    }
   };
 
   const readLoop = async (port) => {
@@ -245,9 +249,9 @@ export default function App() {
             <div className="lbl">Pendant</div>
             {!serialOk && (
               <div className="note">
-                This browser can't talk to USB devices (phones and iPads can't).
-                Draw here, tap <b>Copy link</b>, then open it on a laptop with
-                Chrome or Edge to send it.
+                This browser doesn't support USB serial (iPhones/iPads and most
+                phone browsers don't). Draw here, tap <b>Copy link</b>, then open
+                it on a laptop with Chrome or Edge to send it.
               </div>
             )}
             {!connected
