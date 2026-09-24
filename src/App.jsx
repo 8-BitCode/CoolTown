@@ -4,6 +4,10 @@ const N = 32;
 const CELL = 16;
 const blank = () => new Array(N * N).fill(0);
 
+// Must match the firmware UUIDs
+const AVATAR_SERVICE_UUID = "c0017000-1234-5678-9abc-def012345678";
+const AVATAR_CHAR_UUID    = "c0017001-1234-5678-9abc-def012345678";
+
 // Pack pixels into the firmware's format: row-major, 4 bytes/row, MSB = leftmost pixel
 function pack(px) {
   const out = new Uint8Array(128);
@@ -25,7 +29,7 @@ function fromHex(h) {
   return px;
 }
 
-const serialOk = typeof navigator !== "undefined" && "serial" in navigator;
+const btOk = typeof navigator !== "undefined" && "bluetooth" in navigator;
 
 const css = `
   :root { --paper:#e8e4d8; --ink:#141414; --accent:#d94f2b; --mute:#7a766b; }
@@ -55,6 +59,8 @@ const css = `
   .prev { border:2px solid var(--ink); background:#fff; image-rendering:pixelated;
     width:64px; height:64px; align-self:flex-start; }
   .note { border:2px dashed var(--accent); padding:10px; font-size:13px; line-height:1.4; }
+  .hint { border:2px solid var(--ink); padding:10px; font-size:13px; line-height:1.4;
+    background:#fff; }
   input { font:inherit; font-size:16px; min-height:44px; width:100%; padding:8px;
     border:2px solid var(--ink); background:#fff; color:var(--ink); }
   pre { background:var(--ink); color:#b8e08a; padding:10px; height:130px; overflow:auto;
@@ -72,18 +78,18 @@ export default function App() {
     const m = (window.location.hash || "").match(/a=([0-9a-fA-F]+)/);
     return (m && fromHex(m[1])) || blank();
   });
-  const [tool, setTool] = useState(1); // 1 = draw, 0 = erase
+  const [tool, setTool] = useState(1);
   const [mirror, setMirror] = useState(true);
-  const [log, setLog] = useState(["Ready. Close Arduino Serial Monitor first."]);
+  const [log, setLog] = useState(["Ready. Put the pendant in Pair mode (MID on Home), then tap Connect Bluetooth."]);
   const [codeIn, setCodeIn] = useState("");
-  const portRef = useRef(null);
-  const writerRef = useRef(null);
   const [connected, setConnected] = useState(false);
+  const [deviceName, setDeviceName] = useState("");
   const drawing = useRef(false);
   const last = useRef(null);
+  const btDeviceRef = useRef(null);
+  const btCharRef = useRef(null);
   const addLog = (m) => setLog((l) => [...l.slice(-60), m]);
 
-  // Render main grid + small e-ink preview
   useEffect(() => {
     const c = canvasRef.current.getContext("2d");
     c.fillStyle = "#fff";
@@ -121,7 +127,6 @@ export default function App() {
             cl(Math.floor(((e.clientY - r.top) / r.height) * N))];
   };
 
-  // Paint from the last touched cell to this one so fast swipes leave no gaps
   const paint = (e) => {
     const [x1, y1] = cellAt(e);
     const [x0, y0] = last.current || [x1, y1];
@@ -141,50 +146,48 @@ export default function App() {
 
   const stop = () => { drawing.current = false; last.current = null; };
 
-  const connect = async () => {
+  const connectBT = async () => {
     try {
-      const port = await navigator.serial.requestPort();
-      await port.open({ baudRate: 115200 });
-      // Stop DTR/RTS from holding the ESP32 in reset
-      await port.setSignals({ dataTerminalReady: false, requestToSend: false });
-      portRef.current = port;
-      writerRef.current = port.writable.getWriter();
+      addLog("Scanning... (pendant must be in Pair mode)");
+      const device = await navigator.bluetooth.requestDevice({
+        filters: [{ services: [AVATAR_SERVICE_UUID] }],
+        optionalServices: [AVATAR_SERVICE_UUID],
+      });
+      addLog("Found: " + (device.name || "(unnamed)"));
+      const server = await device.gatt.connect();
+      const service = await server.getPrimaryService(AVATAR_SERVICE_UUID);
+      const ch = await service.getCharacteristic(AVATAR_CHAR_UUID);
+      btDeviceRef.current = device;
+      btCharRef.current = ch;
+      device.addEventListener("gattserverdisconnected", () => {
+        btCharRef.current = null;
+        setConnected(false);
+        setDeviceName("");
+        addLog("Disconnected.");
+      });
       setConnected(true);
-      addLog("Connected.");
-      readLoop(port);
+      setDeviceName(device.name || "pendant");
+      addLog("Connected via Bluetooth.");
     } catch (err) {
-      addLog("Connect failed: " + err.message);
-      if (err.name === "NotFoundError")
-        addLog("If the device list was empty, this browser can't see the pendant's USB chip (common on phones). Use a laptop with Chrome/Edge: tap Copy link and open it there.");
+      if (err.name === "NotFoundError") {
+        addLog("No pendant found. Make sure you pressed MID on the Home screen first (Pair mode).");
+      } else {
+        addLog("BT connect failed: " + err.message);
+      }
     }
   };
 
-  const readLoop = async (port) => {
-    const dec = new TextDecoder();
-    let buf = "";
-    const reader = port.readable.getReader();
-    try {
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buf += dec.decode(value);
-        const lines = buf.split("\n");
-        buf = lines.pop();
-        lines.forEach((l) => l.trim() && addLog("< " + l.trim()));
-      }
-    } catch {} finally { reader.releaseLock(); }
-  };
-
-  const disconnect = async () => {
-    try {
-      writerRef.current?.releaseLock();
-      await portRef.current?.close();
-    } catch {}
+  const disconnectBT = async () => {
+    try { btDeviceRef.current?.gatt?.disconnect(); } catch {}
+    btCharRef.current = null;
     setConnected(false);
+    setDeviceName("");
     addLog("Disconnected.");
   };
 
   const send = async () => {
+    const ch = btCharRef.current;
+    if (!ch) return;
     const data = pack(px);
     let sum = 0;
     data.forEach((b) => (sum ^= b));
@@ -192,13 +195,20 @@ export default function App() {
     frame.set([0xc0, 0x01]);
     frame.set(data, 2);
     frame[130] = sum;
+
+    // Default ATT MTU is 23 -> 20 byte writes are universally safe.
+    const CHUNK = 20;
     try {
-      await writerRef.current.write(frame);
-      addLog("> sent 131 bytes");
-    } catch (err) { addLog("Send failed: " + err.message); }
+      for (let i = 0; i < frame.length; i += CHUNK) {
+        const slice = frame.slice(i, Math.min(i + CHUNK, frame.length));
+        await ch.writeValueWithResponse(slice);
+      }
+      addLog("> sent 131 bytes over BLE");
+    } catch (err) {
+      addLog("Send failed: " + err.message);
+    }
   };
 
-  // Save / load so a phone drawing can be finished off on a laptop
   const code = toHex(pack(px));
   const copy = async (text, what) => {
     try { await navigator.clipboard.writeText(text); addLog(`Copied ${what}.`); }
@@ -217,7 +227,14 @@ export default function App() {
       <style>{css}</style>
       <div className="wrap">
         <h1>CoolTown avatar</h1>
-        <p className="sub">Draw a 32×32 avatar, then send it to the pendant over USB-C.</p>
+        <p className="sub">Draw a 32×32 avatar, then send it to the pendant over Bluetooth.</p>
+
+        <div className="hint" style={{ marginBottom: 16 }}>
+          <b>How to send:</b> on the pendant, press <b>MID</b> on the Home
+          screen to enter <b>Pair mode</b>, then tap <b>Connect Bluetooth</b>
+          here and pick the pendant from the list.
+        </div>
+
         <div className="row">
           <div className="stage">
             <canvas
@@ -247,18 +264,22 @@ export default function App() {
             <canvas ref={prevRef} className="prev" width={N} height={N} />
 
             <div className="lbl">Pendant</div>
-            {!serialOk && (
+            {!btOk && (
               <div className="note">
-                This browser doesn't support USB serial (iPhones/iPads and most
-                phone browsers don't). Draw here, tap <b>Copy link</b>, then open
-                it on a laptop with Chrome or Edge to send it.
+                This browser doesn't support Web Bluetooth. On iOS this is
+                never available — try Chrome on Android or a desktop
+                (Chrome/Edge). You can still design an avatar here and use
+                <b> Copy link</b> / <b>Copy code</b> to move it.
               </div>
             )}
             {!connected
-              ? <button className="go" onClick={connect} disabled={!serialOk}>Connect USB</button>
+              ? <button className="go" onClick={connectBT} disabled={!btOk}>Connect Bluetooth</button>
               : <>
                   <button className="go" onClick={send}>Send to pendant</button>
-                  <button onClick={disconnect}>Disconnect</button>
+                  <button onClick={disconnectBT}>Disconnect</button>
+                  <div style={{ fontSize: 12, color: "var(--mute)" }}>
+                    Connected: {deviceName}
+                  </div>
                 </>}
 
             <div className="lbl">Move between devices</div>
@@ -271,7 +292,8 @@ export default function App() {
             <button onClick={loadCode} disabled={!codeIn}>Load</button>
           </div>
         </div>
-        <div className="lbl" style={{ margin: "20px 0 6px" }}>Serial log</div>
+
+        <div className="lbl" style={{ margin: "20px 0 6px" }}>Log</div>
         <pre>{log.join("\n")}</pre>
       </div>
     </>
