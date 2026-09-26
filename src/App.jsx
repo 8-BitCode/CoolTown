@@ -3,6 +3,7 @@ import React, { useRef, useState, useEffect } from "react";
 const N = 32;
 const CELL = 16;
 const blank = () => new Array(N * N).fill(0);
+const HISTORY_LIMIT = 30;
 
 // Must match the firmware UUIDs
 const AVATAR_SERVICE_UUID = "c0017000-1234-5678-9abc-def012345678";
@@ -81,11 +82,13 @@ export default function App() {
   const [tool, setTool] = useState(1);
   const [mirror, setMirror] = useState(true);
   const [log, setLog] = useState([
-    "Ready. Put the pendant in Pair mode (MID on Home), then tap Connect Bluetooth.",
+    "Ready. Put the pendant in Pair mode (MID on Avatars), then tap Connect Bluetooth.",
   ]);
   const [codeIn, setCodeIn] = useState("");
   const [connected, setConnected] = useState(false);
   const [deviceName, setDeviceName] = useState("");
+  const [history, setHistory] = useState([]);   // stack of past px states
+
   const drawing = useRef(false);
   const last = useRef(null);
   const btDeviceRef = useRef(null);
@@ -129,6 +132,25 @@ export default function App() {
             cl(Math.floor(((e.clientY - r.top) / r.height) * N))];
   };
 
+  // ---- Undo helpers ----
+  // Snapshot the current pixel array onto the history stack. Call this
+  // immediately BEFORE any mutating action (start of stroke, clear, etc).
+  const snapshot = (current) => {
+    setHistory((h) => {
+      const next = [...h, current];
+      if (next.length > HISTORY_LIMIT) next.shift();
+      return next;
+    });
+  };
+
+  const undo = () => {
+    setHistory((h) => {
+      if (!h.length) return h;
+      setPx(h[h.length - 1]);
+      return h.slice(0, -1);
+    });
+  };
+
   const paint = (e) => {
     const [x1, y1] = cellAt(e);
     const [x0, y0] = last.current || [x1, y1];
@@ -146,7 +168,35 @@ export default function App() {
     });
   };
 
+  const startStroke = (e) => {
+    drawing.current = true;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    snapshot(px);           // one snapshot per stroke
+    paint(e);
+  };
+
   const stop = () => { drawing.current = false; last.current = null; };
+
+  const doClear = () => { snapshot(px); setPx(blank()); };
+  const doInvert = () => { snapshot(px); setPx(px.map((v) => 1 - v)); };
+
+  // ---- BLE ----
+  const sendFrame = async (ch, pixels) => {
+    const data = pack(pixels);
+    let sum = 0;
+    data.forEach((b) => (sum ^= b));
+    const frame = new Uint8Array(131);
+    frame.set([0xc0, 0x01]);
+    frame.set(data, 2);
+    frame[130] = sum;
+
+    // Default ATT MTU is 23 -> 20 byte writes are universally safe.
+    const CHUNK = 20;
+    for (let i = 0; i < frame.length; i += CHUNK) {
+      const slice = frame.slice(i, Math.min(i + CHUNK, frame.length));
+      await ch.writeValueWithResponse(slice);
+    }
+  };
 
   const connectBT = async () => {
     const tryOnce = async (options, label) => {
@@ -180,6 +230,7 @@ export default function App() {
           "by name prefix"
         );
       }
+
       const { device, ch } = r;
       btDeviceRef.current = device;
       btCharRef.current = ch;
@@ -192,6 +243,11 @@ export default function App() {
       setConnected(true);
       setDeviceName(device.name || "pendant");
       addLog("Connected via Bluetooth.");
+
+      // Auto-send right after connecting, so the user only clicks once.
+      addLog("> sending avatar...");
+      await sendFrame(ch, px);
+      addLog("> sent 131 bytes over BLE");
     } catch (err) {
       if (err.name === "NotFoundError") {
         addLog(
@@ -212,24 +268,12 @@ export default function App() {
     addLog("Disconnected.");
   };
 
+  // Used by the "Send to pendant" button (for re-sends after editing)
   const send = async () => {
     const ch = btCharRef.current;
     if (!ch) return;
-    const data = pack(px);
-    let sum = 0;
-    data.forEach((b) => (sum ^= b));
-    const frame = new Uint8Array(131);
-    frame.set([0xc0, 0x01]);
-    frame.set(data, 2);
-    frame[130] = sum;
-
-    // Default ATT MTU is 23 -> 20 byte writes are universally safe.
-    const CHUNK = 20;
     try {
-      for (let i = 0; i < frame.length; i += CHUNK) {
-        const slice = frame.slice(i, Math.min(i + CHUNK, frame.length));
-        await ch.writeValueWithResponse(slice);
-      }
+      await sendFrame(ch, px);
       addLog("> sent 131 bytes over BLE");
     } catch (err) {
       addLog("Send failed: " + err.message);
@@ -245,7 +289,7 @@ export default function App() {
   const loadCode = () => {
     const m = codeIn.match(/a=([0-9a-fA-F]+)/);
     const n = fromHex(m ? m[1] : codeIn);
-    if (n) { setPx(n); setCodeIn(""); addLog("Loaded avatar from code."); }
+    if (n) { snapshot(px); setPx(n); setCodeIn(""); addLog("Loaded avatar from code."); }
     else addLog("That code isn't valid (needs 256 hex characters).");
   };
 
@@ -257,10 +301,10 @@ export default function App() {
         <p className="sub">Draw a 32×32 avatar, then send it to the pendant over Bluetooth.</p>
 
         <div className="hint" style={{ marginBottom: 16 }}>
-          <b>How to send:</b> on the pendant, press <b>MID</b> on the Home
-          screen (or on Avatars with no avatar yet) so the display shows{" "}
-          <b>PAIRING…</b> with a blinking square, then tap{" "}
-          <b>Connect Bluetooth</b> here and pick the pendant from the list.
+          <b>How to send:</b> on the pendant, go to <b>Avatars</b> and press{" "}
+          <b>MID</b> so the display shows <b>PAIRING…</b> with a blinking square,
+          then tap <b>Connect Bluetooth</b> below. The avatar is sent automatically
+          once connected.
         </div>
 
         <div className="row">
@@ -271,11 +315,7 @@ export default function App() {
               width={N * CELL}
               height={N * CELL}
               onContextMenu={(e) => e.preventDefault()}
-              onPointerDown={(e) => {
-                drawing.current = true;
-                e.currentTarget.setPointerCapture(e.pointerId);
-                paint(e);
-              }}
+              onPointerDown={startStroke}
               onPointerMove={(e) => drawing.current && paint(e)}
               onPointerUp={stop}
               onPointerCancel={stop}
@@ -289,8 +329,11 @@ export default function App() {
               <button className={mirror ? "on" : ""} onClick={() => setMirror(!mirror)}>
                 Mirror: {mirror ? "on" : "off"}
               </button>
-              <button onClick={() => setPx(px.map((v) => 1 - v))}>Invert</button>
-              <button onClick={() => setPx(blank())}>Clear</button>
+              <button onClick={undo} disabled={!history.length}>
+                Undo ({history.length})
+              </button>
+              <button onClick={doInvert}>Invert</button>
+              <button onClick={doClear}>Clear</button>
             </div>
             <div className="lbl">Preview</div>
             <canvas ref={prevRef} className="prev" width={N} height={N} />
@@ -307,12 +350,12 @@ export default function App() {
             {!connected
               ? (
                 <button className="go" onClick={connectBT} disabled={!btOk}>
-                  Connect Bluetooth
+                  Connect &amp; send
                 </button>
               )
               : (
                 <>
-                  <button className="go" onClick={send}>Send to pendant</button>
+                  <button className="go" onClick={send}>Send again</button>
                   <button onClick={disconnectBT}>Disconnect</button>
                   <div style={{ fontSize: 12, color: "var(--mute)" }}>
                     Connected: {deviceName}
