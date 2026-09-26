@@ -188,11 +188,11 @@ const css = `
   .brush-dot { display:block; background:currentColor; }
 
   .steps { list-style:none; margin:4px 0 0; padding:0; }
-  .steps li { display:flex; align-items:center; gap:10px;
-    padding:7px 0; font-size:14px; }
+  .steps li { display:flex; align-items:flex-start; gap:10px;
+    padding:7px 0; font-size:14px; line-height:1.45; }
   .steps li:not(:last-child) { border-bottom:1px dashed #ccc; }
   .steps li::before { content:"•"; flex:0 0 auto; color:var(--accent); font-size:20px;
-    font-weight:bold; line-height:1; }
+    font-weight:bold; line-height:1.2; }
   input { font:inherit; font-size:16px; min-height:44px; width:100%; padding:8px;
     border:2px solid var(--ink); background:#fff; color:var(--ink); }
   pre { background:var(--ink); color:#b8e08a; padding:10px; height:130px; overflow:auto;
@@ -214,7 +214,7 @@ export default function App() {
   const [mirror, setMirror] = useState(true);
   const [brushSize, setBrushSize] = useState(1);
   const [log, setLog] = useState([
-    "Ready. Put the pendant in Pair mode (MID on Avatars), then tap Connect & send.",
+    "Ready. On the pendant, scroll down to the Avatars screen, then press the wheel in to start pairing. Then tap Connect & send here.",
   ]);
   const [codeIn, setCodeIn] = useState("");
   const [connected, setConnected] = useState(false);
@@ -236,9 +236,6 @@ export default function App() {
   const useWifi = !btOk || wifiMode;
 
   // ---- Network help panel (WiFi path only) ----
-  // Opened by the quiet "Trouble connecting?" link, or automatically when a
-  // WiFi attempt fails at the browser level. No permission API is queried
-  // any more - the panel is pure static instructions.
   const [showNetworkHelp, setShowNetworkHelp] = useState(false);
 
   // ---- Pendant hotspot detection (WiFi path only) ----
@@ -687,10 +684,30 @@ export default function App() {
         <div className="hint" style={{ marginBottom: 16 }}>
           <b>How to send</b>
           <ol className="steps">
-            <li>On the pendant: <b>Avatars</b> → <b>MID</b> to start Pairing</li>
-            {useWifi && <li>Press <b>UP</b> on the pendant to switch it to WiFi</li>}
-            {useWifi && <li>Join WiFi network <b>CoolTown-XXXX</b> on this device</li>}
-            <li>Tap <b>Connect &amp; send</b> below</li>
+            <li>
+              On the pendant's side, scroll <b>down</b> with the wheel to
+              reach the <b>Avatars</b> screen.
+            </li>
+            <li>
+              <b>Press the wheel in</b> to start pairing.
+            </li>
+            {useWifi && (
+              <li>
+                While it's pairing, scroll <b>up</b> to switch it to WiFi.
+              </li>
+            )}
+            {useWifi && (
+              <li>
+                On this device, join the WiFi network called{" "}
+                <b>CoolTown-XXXX</b>.
+              </li>
+            )}
+            <li>
+              Draw your avatar on the canvas below.
+            </li>
+            <li>
+              Tap <b>Connect &amp; send</b> below.
+            </li>
           </ol>
         </div>
 
@@ -818,9 +835,6 @@ export default function App() {
               </>
             )}
 
-            {/* WiFi-path help panel. Opened by the "Trouble connecting?"
-                link below, or automatically when a WiFi attempt fails at
-                the browser level. */}
             {useWifi && showNetworkHelp && (
               <div className="help" role="region" aria-label="Network access help">
                 <h3>Let this page talk to your pendant</h3>
@@ -866,8 +880,6 @@ export default function App() {
               </div>
             )}
 
-            {/* Quiet link - the sole entry point to the help panel. Shown
-                on the WiFi path whenever the panel isn't already open. */}
             {useWifi && !showNetworkHelp && !connected && (
               <button className="link" onClick={() => setShowNetworkHelp(true)}>
                 Trouble connecting?
