@@ -72,9 +72,7 @@ const btOk = typeof navigator !== "undefined" && "bluetooth" in navigator;
 const isBlank = (p) => !p || p.every((v) => !v);
 
 // Rough classifier for "this wasn't a normal HTTP error, the browser
-// wouldn't even let the request out". Covers Chrome's Local Network Access
-// block, mixed-content blocks from an HTTPS page, DNS/route failures to
-// the private IP, and plain TypeError: Failed to fetch. Used only to decide
+// wouldn't even let the request out". Only used on the WiFi path to decide
 // whether to surface the network-help panel - the exact cause still gets
 // logged verbatim either way.
 const looksLikeNetworkBlock = (err) => {
@@ -134,9 +132,8 @@ const css = `
   .notice { background:var(--accent); color:#fff; border:2px solid var(--ink);
     padding:10px; font-size:13px; font-weight:bold; line-height:1.4; }
 
-  /* Network-help panel. Same chrome as .hint but with an accent left edge
-     so it reads as a "you need to do something" callout rather than plain
-     copy. */
+  /* Instructions / help panel. Same chrome as .hint but with an accent
+     left edge so it reads as a "you need to do something" callout. */
   .help { border:2px solid var(--ink); border-left:6px solid var(--accent);
     padding:12px; font-size:13px; line-height:1.45; background:#fff; }
   .help h3 { margin:0 0 6px; font-size:14px; }
@@ -146,9 +143,13 @@ const css = `
   .help .substep { display:block; color:var(--mute); font-size:12px; margin-top:2px; }
   .help code { background:rgba(20,20,20,.08); padding:1px 4px; font-size:12px; }
 
-  /* Brush-size picker under the canvas. Reuses the same button chrome as
-     the Tools grid, but lays out horizontally and includes a small square
-     swatch that scales with the brush size. */
+  /* Quiet secondary link-style button used under the primary actions. */
+  .link { background:none; border:none; padding:4px 0; min-height:0;
+    color:var(--mute); font-size:12px; text-decoration:underline;
+    text-underline-offset:2px; text-align:left; }
+  .link:active { background:none; color:var(--accent); }
+
+  /* Brush-size picker under the canvas. */
   .brush-section { margin-top:14px; }
   .brush-row { display:flex; gap:8px; flex-wrap:wrap; }
   .brush { display:flex; align-items:center; gap:8px; min-height:44px;
@@ -188,7 +189,7 @@ export default function App() {
   const [mirror, setMirror] = useState(true);
   const [brushSize, setBrushSize] = useState(1);
   const [log, setLog] = useState([
-    "Ready. Put the pendant in Pair mode (MID on Avatars). Join its WiFi network for an automatic connection, or tap Connect Bluetooth.",
+    "Ready. Put the pendant in Pair mode (MID on Avatars), then tap Connect & send.",
   ]);
   const [codeIn, setCodeIn] = useState("");
   const [connected, setConnected] = useState(false);
@@ -204,14 +205,16 @@ export default function App() {
   const [notice, setNotice] = useState(null);
   const noticeTimer = useRef(null);
 
-  // ---- Local-network access ----
-  // Chrome/Edge expose a "local-network-access" permission that gates any
-  // fetch() to a private address like 192.168.4.1. We track its state so we
-  // can offer a button that *opens* the browser prompt. Note: the button
-  // can only cause the dialog to appear while the state is still "prompt" —
-  // once the user picks Block it becomes "denied" and the browser will not
-  // ask again, no matter what we call. In that case the button falls back
-  // to rendering the manual instructions panel instead.
+  // ---- WiFi mode ----
+  // On a browser without Web Bluetooth (iOS Safari, Firefox) the page is
+  // always in WiFi mode. On Chrome it starts in Bluetooth mode, but the
+  // user can opt into WiFi via the "Having problems?" link, which flips
+  // the whole page into the WiFi variant - same hint, same transport, same
+  // local-network permission UI a non-Bluetooth browser would see.
+  const [wifiMode, setWifiMode] = useState(false);
+  const useWifi = !btOk || wifiMode;
+
+  // ---- Local-network access (WiFi path only) ----
   const [lnaState, setLnaState] = useState("checking"); // checking | granted | prompt | denied | unsupported
   const [showNetworkHelp, setShowNetworkHelp] = useState(false);
 
@@ -243,11 +246,10 @@ export default function App() {
   }, [px]);
 
   // Query the local-network-access permission on mount, and again whenever
-  // the tab regains focus (in case the user flipped it in site settings and
-  // came back). `status.onchange` also fires live if it changes while the
-  // page is open, so a successful Allow makes the button disappear without
-  // a reload.
+  // the tab regains focus or the user flips into WiFi mode. Only meaningful
+  // on the WiFi path.
   useEffect(() => {
+    if (!useWifi) return;
     let cancelled = false;
     let statusRef = null;
 
@@ -267,8 +269,6 @@ export default function App() {
           if (!cancelled) setLnaState(status.state);
         };
       } catch {
-        // Browser doesn't recognise this permission name (Firefox, Safari,
-        // older Chrome). Fall through to the static instructions.
         if (!cancelled) setLnaState("unsupported");
       }
     };
@@ -280,16 +280,13 @@ export default function App() {
       window.removeEventListener("focus", check);
       if (statusRef) statusRef.onchange = null;
     };
-  }, []);
+  }, [useWifi]);
 
   // Called by the "Allow local network access" button. A plain fetch() to
   // the pendant's private IP is what causes the browser to show its own
-  // dialog - there is no dedicated request API. The button click supplies
-  // the transient user activation the prompt requires, and a generous
-  // timeout gives the user time to actually read the dialog.
+  // dialog - there is no dedicated request API.
   const requestLocalNetwork = async () => {
     if (lnaState === "denied") {
-      // Nothing to trigger - surface the manual instructions instead.
       setShowNetworkHelp(true);
       addLog("Local network access is blocked in site settings - open the panel for steps.");
       return;
@@ -301,8 +298,6 @@ export default function App() {
     } catch {
       addLog("Request didn't complete - if a Block option was shown, re-allow it in site settings.");
     }
-    // status.onchange above will move lnaState to "granted" on success, at
-    // which point the button disappears on its own.
   };
 
   const drawing = useRef(false);
@@ -559,10 +554,8 @@ export default function App() {
     return true;
   };
 
-  // Re-reads the permission state and re-renders the button/panel as
-  // appropriate. Called from the network-error catch blocks so the button
-  // reflects reality the next time it renders.
   const refreshLnaState = async () => {
+    if (!useWifi) return;
     if (!navigator.permissions?.query) return;
     try {
       const s = await navigator.permissions.query({ name: "local-network-access" });
@@ -596,7 +589,7 @@ export default function App() {
       setConnected(true);
       setTransport("wifi");
       setDeviceName("pendant");
-      setShowNetworkHelp(false);   // it worked, so no need for the help panel
+      setShowNetworkHelp(false);
       addLog("Connected via WiFi.");
       if (resolveAfterConnect(loaded, "wifi")) {
         addLog("> sending avatar...");
@@ -637,9 +630,11 @@ export default function App() {
     return () => { cancelled = true; clearInterval(id); };
   }, [transport]);
 
+  // On the WiFi path we go straight to WiFi regardless of whether the
+  // pendant's hotspot has been detected yet - the log message on failure is
+  // the useful feedback, not a disabled button.
   const connectPendant = () => {
-    if (wifiDetected) return connectWifi();
-    if (btOk) return connectBT();
+    if (!useWifi) return connectBT();
     return connectWifi();
   };
 
@@ -719,6 +714,23 @@ export default function App() {
     else addLog("That code isn't valid (needs 256 hex characters).");
   };
 
+  // Flipping into WiFi mode rebuilds the page as the WiFi variant: hint
+  // changes, Connect uses WiFi, LNA UI appears.
+  const enterWifiMode = () => {
+    setWifiMode(true);
+    setShowWifiHelp(true);
+    setShowNetworkHelp(false);
+    addLog("Switched to WiFi. Follow the steps above, then tap Connect & send.");
+  };
+  const exitWifiMode = () => {
+    setWifiMode(false);
+    setShowWifiHelp(false);
+    setShowNetworkHelp(false);
+    addLog("Back to Bluetooth mode.");
+  };
+
+  const [showWifiHelp, setShowWifiHelp] = useState(false);
+
   return (
     <>
       <style>{css}</style>
@@ -730,8 +742,8 @@ export default function App() {
           <b>How to send</b>
           <ol className="steps">
             <li>On the pendant: <b>Avatars</b> → <b>MID</b> to start Pairing</li>
-            {!btOk && <li>Press <b>UP</b> on the pendant to switch it to WiFi</li>}
-            {!btOk && <li>Join WiFi network <b>CoolTown-XXXX</b> on this device</li>}
+            {useWifi && <li>Press <b>UP</b> on the pendant to switch it to WiFi</li>}
+            {useWifi && <li>Join WiFi network <b>CoolTown-XXXX</b> on this device</li>}
             <li>Tap <b>Connect &amp; send</b> below</li>
           </ol>
         </div>
@@ -795,9 +807,7 @@ export default function App() {
 
             <div className="lbl">Pendant</div>
 
-            {/* Blank-canvas / status banner: sits directly above the
-                Connect & send / Send again buttons so it's always in view
-                when you tap them. */}
+            {/* Blank-canvas / status banner. */}
             {notice && (
               <div className="notice" role="status" aria-live="polite">
                 {notice}
@@ -805,12 +815,7 @@ export default function App() {
             )}
 
             {!connected && (
-              <button
-                className="go"
-                onClick={connectPendant}
-                disabled={!(wifiDetected || btOk)}
-                style={{ opacity: (wifiDetected || btOk) ? 1 : 0.3 }}
-              >
+              <button className="go" onClick={connectPendant}>
                 Connect &amp; send
               </button>
             )}
@@ -843,33 +848,21 @@ export default function App() {
               </>
             )}
 
-            {/* One-tap local-network permission button. Renders while the
-                permission is still answerable ("prompt") or already blocked
-                ("denied", in which case it forwards to the manual panel).
-                Hides itself entirely once granted, or on browsers that
-                don't expose this permission. */}
-            {(lnaState === "prompt" || lnaState === "denied") && !showNetworkHelp && (
-              <button
-                className="go"
-                onClick={requestLocalNetwork}
-              >
+            {/* WiFi-mode-specific UI. Same block a non-Bluetooth browser
+                sees, surfaced here on Chrome once the user opts into WiFi. */}
+            {useWifi && (lnaState === "prompt" || lnaState === "denied") && !showNetworkHelp && !connected && (
+              <button className="go" onClick={requestLocalNetwork}>
                 {lnaState === "denied"
                   ? "Open permission settings"
                   : "Allow local network access"}
               </button>
             )}
-
-            {/* Confirmation that self-dismisses the moment the state flips. */}
-            {lnaState === "granted" && !showNetworkHelp && (
+            {useWifi && lnaState === "granted" && !showNetworkHelp && !connected && (
               <div className="notice" role="status">
                 Local network access allowed.
               </div>
             )}
-
-            {/* Manual instructions. Opened by the button above when the
-                state is "denied" (the browser won't re-prompt), or by the
-                quiet "Trouble connecting?" link below. */}
-            {showNetworkHelp && (
+            {useWifi && showNetworkHelp && (
               <div className="help" role="region" aria-label="Network access help">
                 <h3>Allow this site to reach your pendant</h3>
                 <p>
@@ -896,10 +889,6 @@ export default function App() {
                     </span>
                   </li>
                 </ol>
-                <p style={{ fontSize: 12, color: "var(--mute)" }}>
-                  Alternatively, use <b>Bluetooth</b> instead — it isn't
-                  affected by local-network restrictions.
-                </p>
                 <div className="tools" style={{ marginTop: 10 }}>
                   <button onClick={() => window.location.reload()}>
                     Reload page
@@ -910,17 +899,23 @@ export default function App() {
                 </div>
               </div>
             )}
-
-            {/* Quiet manual entry point, for the case where the button
-                above isn't showing (e.g. unsupported browser) but the user
-                still hit a network failure. */}
-            {!showNetworkHelp && (lnaState === "unsupported" || lnaState === "granted") && (
-              <button
-                onClick={() => setShowNetworkHelp(true)}
-                style={{ minHeight: 32, fontSize: 12, padding: "6px 10px",
-                  color: "var(--mute)" }}
-              >
+            {useWifi && !showNetworkHelp && (lnaState === "unsupported" || lnaState === "granted") && !connected && (
+              <button className="link" onClick={() => setShowNetworkHelp(true)}>
                 Trouble connecting?
+              </button>
+            )}
+
+            {/* Bluetooth-mode-only controls: enter WiFi mode, or (once in
+                WiFi mode) go back to Bluetooth. Only rendered on a browser
+                that actually supports BLE. */}
+            {btOk && !useWifi && !connected && (
+              <button className="link" onClick={enterWifiMode}>
+                Having problems? Try connecting via WiFi
+              </button>
+            )}
+            {btOk && wifiMode && !connected && (
+              <button className="link" onClick={exitWifiMode}>
+                Back to Bluetooth
               </button>
             )}
 
