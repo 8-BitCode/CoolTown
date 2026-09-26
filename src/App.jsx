@@ -71,6 +71,17 @@ function fromHex(h) {
 const btOk = typeof navigator !== "undefined" && "bluetooth" in navigator;
 const isBlank = (p) => !p || p.every((v) => !v);
 
+// Rough classifier for "this wasn't a normal HTTP error, the browser
+// wouldn't even let the request out". Covers Chrome's Local Network Access
+// block, mixed-content blocks from an HTTPS page, DNS/route failures to
+// the private IP, and plain TypeError: Failed to fetch. Used only to decide
+// whether to surface the network-help panel - the exact cause still gets
+// logged verbatim either way.
+const looksLikeNetworkBlock = (err) => {
+  const m = (err && err.message) || String(err || "");
+  return /failed to fetch|networkerror|load failed|blocked|mixed content|local network|err_/i.test(m);
+};
+
 // Tiny read-only preview of a 32x32 pixel array
 function MiniAvatar({ pixels }) {
   const ref = useRef(null);
@@ -123,6 +134,18 @@ const css = `
   .notice { background:var(--accent); color:#fff; border:2px solid var(--ink);
     padding:10px; font-size:13px; font-weight:bold; line-height:1.4; }
 
+  /* Network-help panel. Same chrome as .hint but with an accent left edge
+     so it reads as a "you need to do something" callout rather than plain
+     copy. */
+  .help { border:2px solid var(--ink); border-left:6px solid var(--accent);
+    padding:12px; font-size:13px; line-height:1.45; background:#fff; }
+  .help h3 { margin:0 0 6px; font-size:14px; }
+  .help p { margin:6px 0; }
+  .help ol { margin:6px 0 6px 18px; padding:0; }
+  .help ol li { margin:6px 0; }
+  .help .substep { display:block; color:var(--mute); font-size:12px; margin-top:2px; }
+  .help code { background:rgba(20,20,20,.08); padding:1px 4px; font-size:12px; }
+
   /* Brush-size picker under the canvas. Reuses the same button chrome as
      the Tools grid, but lays out horizontally and includes a small square
      swatch that scales with the brush size. */
@@ -174,15 +197,23 @@ export default function App() {
   const [conflict, setConflict] = useState(null);
   const [history, setHistory] = useState([]);
 
-  // Cell under the pointer, or null when it's off the canvas. Only updated
-  // when the cell actually changes, so we don't re-render on every pixel of
-  // pointer travel. Drives the low-opacity "what will this tap paint?"
-  // ghost in the canvas render effect below.
+  // Cell under the pointer, or null when it's off the canvas.
   const [hover, setHover] = useState(null);
 
   // ---- Transient on-screen banner (blank canvas, etc.) ----
   const [notice, setNotice] = useState(null);
   const noticeTimer = useRef(null);
+
+  // ---- Local-network access ----
+  // Chrome/Edge expose a "local-network-access" permission that gates any
+  // fetch() to a private address like 192.168.4.1. We track its state so we
+  // can offer a button that *opens* the browser prompt. Note: the button
+  // can only cause the dialog to appear while the state is still "prompt" —
+  // once the user picks Block it becomes "denied" and the browser will not
+  // ask again, no matter what we call. In that case the button falls back
+  // to rendering the manual instructions panel instead.
+  const [lnaState, setLnaState] = useState("checking"); // checking | granted | prompt | denied | unsupported
+  const [showNetworkHelp, setShowNetworkHelp] = useState(false);
 
   const clearNotice = () => {
     if (noticeTimer.current) {
@@ -201,7 +232,6 @@ export default function App() {
     }, 3500);
   };
 
-  // Kill the timer if the component ever unmounts.
   useEffect(() => () => {
     if (noticeTimer.current) clearTimeout(noticeTimer.current);
   }, []);
@@ -212,6 +242,69 @@ export default function App() {
     if (!isBlank(px) && noticeTimer.current) clearNotice();
   }, [px]);
 
+  // Query the local-network-access permission on mount, and again whenever
+  // the tab regains focus (in case the user flipped it in site settings and
+  // came back). `status.onchange` also fires live if it changes while the
+  // page is open, so a successful Allow makes the button disappear without
+  // a reload.
+  useEffect(() => {
+    let cancelled = false;
+    let statusRef = null;
+
+    const check = async () => {
+      if (!navigator.permissions?.query) {
+        if (!cancelled) setLnaState("unsupported");
+        return;
+      }
+      try {
+        const status = await navigator.permissions.query({
+          name: "local-network-access",
+        });
+        if (cancelled) return;
+        statusRef = status;
+        setLnaState(status.state);   // "granted" | "prompt" | "denied"
+        status.onchange = () => {
+          if (!cancelled) setLnaState(status.state);
+        };
+      } catch {
+        // Browser doesn't recognise this permission name (Firefox, Safari,
+        // older Chrome). Fall through to the static instructions.
+        if (!cancelled) setLnaState("unsupported");
+      }
+    };
+
+    check();
+    window.addEventListener("focus", check);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", check);
+      if (statusRef) statusRef.onchange = null;
+    };
+  }, []);
+
+  // Called by the "Allow local network access" button. A plain fetch() to
+  // the pendant's private IP is what causes the browser to show its own
+  // dialog - there is no dedicated request API. The button click supplies
+  // the transient user activation the prompt requires, and a generous
+  // timeout gives the user time to actually read the dialog.
+  const requestLocalNetwork = async () => {
+    if (lnaState === "denied") {
+      // Nothing to trigger - surface the manual instructions instead.
+      setShowNetworkHelp(true);
+      addLog("Local network access is blocked in site settings - open the panel for steps.");
+      return;
+    }
+    addLog("Asking the browser for local network access...");
+    try {
+      await fetchWithTimeout(wifiUrl("/avatar"), {}, 8000);
+      addLog("Request sent. If you saw a prompt, choose Allow.");
+    } catch {
+      addLog("Request didn't complete - if a Block option was shown, re-allow it in site settings.");
+    }
+    // status.onchange above will move lnaState to "granted" on success, at
+    // which point the button disappears on its own.
+  };
+
   const drawing = useRef(false);
   const last = useRef(null);
   const btDeviceRef = useRef(null);
@@ -220,8 +313,6 @@ export default function App() {
   useEffect(() => { pxRef.current = px; }, [px]);
   const addLog = (m) => setLog((l) => [...l.slice(-60), m]);
 
-  // Keep a ref so the pointer-move handler always reads the freshest brush
-  // size, even mid-stroke (it's a closure over the current render).
   const brushRef = useRef(brushSize);
   useEffect(() => { brushRef.current = brushSize; }, [brushSize]);
 
@@ -249,8 +340,6 @@ export default function App() {
     });
 
     // ---- Hover ghost ----
-    // Draw the exact footprint a tap at the hovered cell would commit,
-    // at low opacity, so size / mirror behaviour are visible up front.
     if (hover) {
       const size = brushSize;
       const half = Math.floor((size - 1) / 2);
@@ -281,8 +370,6 @@ export default function App() {
             cl(Math.floor(((e.clientY - r.top) / r.height) * N))];
   };
 
-  // Bail out of the state update if the cell hasn't changed - pointermove
-  // fires many times per pixel and we only care about cell boundaries.
   const updateHover = (e) => {
     const [x, y] = cellAt(e);
     setHover((h) => (h && h[0] === x && h[1] === y ? h : [x, y]));
@@ -305,9 +392,6 @@ export default function App() {
     });
   };
 
-  // Stamp a brushSize x brushSize square whose top-left is offset so the
-  // stamp is roughly centred on (cx, cy). For even sizes the extra pixel
-  // falls to the right/below, which reads naturally under the finger.
   const stamp = (n, cx, cy) => {
     const size = brushRef.current;
     const half = Math.floor((size - 1) / 2);
@@ -342,7 +426,7 @@ export default function App() {
     drawing.current = true;
     e.currentTarget.setPointerCapture(e.pointerId);
     updateHover(e);
-    snapshot(px);           // one snapshot per stroke
+    snapshot(px);
     paint(e);
   };
 
@@ -475,6 +559,17 @@ export default function App() {
     return true;
   };
 
+  // Re-reads the permission state and re-renders the button/panel as
+  // appropriate. Called from the network-error catch blocks so the button
+  // reflects reality the next time it renders.
+  const refreshLnaState = async () => {
+    if (!navigator.permissions?.query) return;
+    try {
+      const s = await navigator.permissions.query({ name: "local-network-access" });
+      setLnaState(s.state);
+    } catch {}
+  };
+
   // ---- WiFi ----
   const wifiGetAvatar = async () => {
     const r = await fetchWithTimeout(wifiUrl("/avatar"), {}, 1500);
@@ -501,6 +596,7 @@ export default function App() {
       setConnected(true);
       setTransport("wifi");
       setDeviceName("pendant");
+      setShowNetworkHelp(false);   // it worked, so no need for the help panel
       addLog("Connected via WiFi.");
       if (resolveAfterConnect(loaded, "wifi")) {
         addLog("> sending avatar...");
@@ -509,6 +605,10 @@ export default function App() {
       }
     } catch (err) {
       addLog("WiFi connect failed: " + err.message + " - make sure you've joined the pendant's network.");
+      if (looksLikeNetworkBlock(err)) {
+        setShowNetworkHelp(true);
+        refreshLnaState();
+      }
     }
   };
 
@@ -543,7 +643,6 @@ export default function App() {
     return connectWifi();
   };
 
-  // Used by the "Send again" button, regardless of which transport connected.
   const send = async () => {
     if (isBlank(px)) {
       showNotice("Canvas is blank — draw something first, then send.");
@@ -563,6 +662,10 @@ export default function App() {
     } catch (err) {
       addLog("Send failed: " + err.message);
       if (transport === "wifi") {
+        if (looksLikeNetworkBlock(err)) {
+          setShowNetworkHelp(true);
+          refreshLnaState();
+        }
         setConnected(false);
         setTransport(null);
         setDeviceName("");
@@ -575,7 +678,6 @@ export default function App() {
     else if (transport === "wifi") disconnectWifi();
   };
 
-  // Resolving the "pendant already has one, you've drawn one too" prompt.
   const keepMine = async () => {
     const t = conflict?.transport;
     setConflict(null);
@@ -590,6 +692,10 @@ export default function App() {
       }
     } catch (err) {
       addLog("Send failed: " + err.message);
+      if (looksLikeNetworkBlock(err)) {
+        setShowNetworkHelp(true);
+        refreshLnaState();
+      }
     }
   };
 
@@ -689,7 +795,7 @@ export default function App() {
 
             <div className="lbl">Pendant</div>
 
-            {/* Blank-canvas / status banner: lives directly above the
+            {/* Blank-canvas / status banner: sits directly above the
                 Connect & send / Send again buttons so it's always in view
                 when you tap them. */}
             {notice && (
@@ -735,6 +841,87 @@ export default function App() {
                   Connected: {deviceName} ({transport === "ble" ? "Bluetooth" : "WiFi"})
                 </div>
               </>
+            )}
+
+            {/* One-tap local-network permission button. Renders while the
+                permission is still answerable ("prompt") or already blocked
+                ("denied", in which case it forwards to the manual panel).
+                Hides itself entirely once granted, or on browsers that
+                don't expose this permission. */}
+            {(lnaState === "prompt" || lnaState === "denied") && !showNetworkHelp && (
+              <button
+                className="go"
+                onClick={requestLocalNetwork}
+              >
+                {lnaState === "denied"
+                  ? "Open permission settings"
+                  : "Allow local network access"}
+              </button>
+            )}
+
+            {/* Confirmation that self-dismisses the moment the state flips. */}
+            {lnaState === "granted" && !showNetworkHelp && (
+              <div className="notice" role="status">
+                Local network access allowed.
+              </div>
+            )}
+
+            {/* Manual instructions. Opened by the button above when the
+                state is "denied" (the browser won't re-prompt), or by the
+                quiet "Trouble connecting?" link below. */}
+            {showNetworkHelp && (
+              <div className="help" role="region" aria-label="Network access help">
+                <h3>Allow this site to reach your pendant</h3>
+                <p>
+                  Your browser is blocking requests to{" "}
+                  <code>192.168.4.1</code> — the pendant's pairing hotspot.
+                  This usually means the site was set to <b>Block</b> at
+                  some point, and the browser won't ask again on its own.
+                </p>
+                <ol>
+                  <li>
+                    <b>Chrome desktop:</b>
+                    <span className="substep">
+                      Settings → Privacy and security → Site settings →
+                      Additional permissions → <b>Local network access</b>{" "}
+                      → set this site to <b>Allow</b>. Then reload.
+                    </span>
+                  </li>
+                  <li>
+                    <b>Chrome Android:</b>
+                    <span className="substep">
+                      Tap the <b>lock</b> or <b>tune</b> icon in the address
+                      bar → <b>Permissions</b> → <b>Local network</b> →{" "}
+                      <b>Allow</b>. Then reload.
+                    </span>
+                  </li>
+                </ol>
+                <p style={{ fontSize: 12, color: "var(--mute)" }}>
+                  Alternatively, use <b>Bluetooth</b> instead — it isn't
+                  affected by local-network restrictions.
+                </p>
+                <div className="tools" style={{ marginTop: 10 }}>
+                  <button onClick={() => window.location.reload()}>
+                    Reload page
+                  </button>
+                  <button onClick={() => setShowNetworkHelp(false)}>
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Quiet manual entry point, for the case where the button
+                above isn't showing (e.g. unsupported browser) but the user
+                still hit a network failure. */}
+            {!showNetworkHelp && (lnaState === "unsupported" || lnaState === "granted") && (
+              <button
+                onClick={() => setShowNetworkHelp(true)}
+                style={{ minHeight: 32, fontSize: 12, padding: "6px 10px",
+                  color: "var(--mute)" }}
+              >
+                Trouble connecting?
+              </button>
             )}
 
             <div className="lbl">Move between devices</div>
