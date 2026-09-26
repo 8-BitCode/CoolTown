@@ -72,13 +72,21 @@ function fromHex(h) {
 const btOk = typeof navigator !== "undefined" && "bluetooth" in navigator;
 const isBlank = (p) => !p || p.every((v) => !v);
 
+// True when this page is served over HTTPS. On iOS Safari (and now some
+// other browsers), an HTTPS page cannot fetch() a plain http:// URL like
+// http://192.168.4.1 - the browser blocks it as mixed content before the
+// request ever leaves. That means our background poll can never light up
+// the Connect button there, so we must not gate it on the poll result.
+const isHttps =
+  typeof window !== "undefined" && window.location.protocol === "https:";
+
 // Rough classifier for "this wasn't a normal HTTP error, the browser
 // wouldn't even let the request out". Used only to auto-open the help panel
 // when a WiFi attempt fails at the browser level - the exact cause still
 // gets logged verbatim either way.
 const looksLikeNetworkBlock = (err) => {
   const m = (err && err.message) || String(err || "");
-  return /failed to fetch|networkerror|load failed|blocked|mixed content|local network|err_/i.test(m);
+  return /failed to fetch|networkerror|load failed|blocked|mixed content|local network|err_|operation couldn't/i.test(m);
 };
 
 // Tiny read-only preview of a 32x32 pixel array
@@ -161,7 +169,9 @@ export default function App() {
   }, [px]);
 
   // Background poll for the pendant's hotspot. Purely to know whether the
-  // Connect button should be live on the WiFi path.
+  // Connect button should be live on the WiFi path. On an HTTPS page this
+  // will always fail on iOS, so it effectively does nothing there - the
+  // button is enabled unconditionally in that case (see canConnect below).
   useEffect(() => {
     if (transport) return;
     let cancelled = false;
@@ -474,7 +484,12 @@ export default function App() {
     addLog("Disconnected.");
   };
 
-  const canConnect = useWifi ? wifiDetected : true;
+  // The Connect button is gated on hotspot detection only when that
+  // detection can actually succeed. On an HTTPS page it can't, because
+  // iOS Safari (and others) block HTTPS->HTTP fetches to 192.168.4.1 as
+  // mixed content. In that case we leave the button enabled so tapping
+  // it produces a real, useful error and opens the help panel.
+  const canConnect = useWifi ? (wifiDetected || isHttps) : true;
 
   const connectPendant = () => {
     if (!canConnect) {
@@ -679,10 +694,21 @@ export default function App() {
               >
                 Connect &amp; send
               </button>
-              {useWifi && !wifiDetected && (
+
+              {/* Explain what we're waiting for - or, on HTTPS, explain
+                  the situation we can't detect our way out of. */}
+              {useWifi && !wifiDetected && !isHttps && (
                 <div className="caption">
                   Waiting for the pendant's WiFi network. Join{" "}
                   <b>CoolTown-XXXX</b> in your device's WiFi settings.
+                </div>
+              )}
+              {useWifi && isHttps && (
+                <div className="caption">
+                  On iPhone, this page has to be opened over{" "}
+                  <b>http://</b> (not <b>https://</b>) to reach the
+                  pendant. If tapping the button doesn't work, tap{" "}
+                  <b>Trouble connecting?</b> below.
                 </div>
               )}
             </>
@@ -730,37 +756,63 @@ export default function App() {
           {useWifi && showNetworkHelp && (
             <div className="help" role="region" aria-label="Network access help">
               <h3>Let this page talk to your pendant</h3>
-              <p>
-                Your browser is stopping this page from sending your avatar
-                to the pendant. This usually happens if <b>Block</b> was
-                tapped the first time your browser asked for permission —
-                it won't ask again on its own, so it has to be switched
-                back on by hand.
-              </p>
-              <ol>
-                <li>
-                  <b>On a computer (Chrome):</b>
-                  <span className="substep">
-                    Settings → Privacy and security → Site settings →
-                    Additional permissions → <b>Local network access</b>{" "}
-                    → set this site to <b>Allow</b>. Then reload the page.
-                  </span>
-                </li>
-                <li>
-                  <b>On Android (Chrome):</b>
-                  <span className="substep">
-                    Tap the <b>lock</b> (or <b>tune</b>) icon in the address
-                    bar → <b>Permissions</b> → <b>Local network</b> →{" "}
-                    <b>Allow</b>. Then reload the page.
-                  </span>
-                </li>
-              </ol>
-              <p>
-                On any other browser: look in the settings for this website
-                for something called <b>Local network access</b>{" "}
-                (sometimes just <b>Local network</b>), and set it to{" "}
-                <b>Allow</b>.
-              </p>
+
+              {/* On HTTPS, the most likely cause is mixed content - lead
+                  with that so the user isn't sent into browser settings
+                  for a permission that isn't the problem. */}
+              {isHttps ? (
+                <>
+                  <p>
+                    Your browser is blocking this page from reaching the
+                    pendant. Because this page uses <b>https://</b> and the
+                    pendant only speaks <b>http://</b>, most browsers
+                    (especially iPhone Safari) refuse to make the request.
+                  </p>
+                  <p>
+                    The fix is to open this same page over{" "}
+                    <b>http://</b> instead of <b>https://</b>. If that's not
+                    possible, try a different device or a desktop Chrome
+                    browser, which is more permissive about this.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p>
+                    Your browser is stopping this page from sending your
+                    avatar to the pendant. This usually happens if{" "}
+                    <b>Block</b> was tapped the first time your browser
+                    asked for permission — it won't ask again on its own,
+                    so it has to be switched back on by hand.
+                  </p>
+                  <ol>
+                    <li>
+                      <b>On iPhone (Safari):</b>
+                      <span className="substep">
+                        Settings → Safari → scroll down to{" "}
+                        <b>Local Network</b> → make sure it's on for this
+                        site. Then reload the page.
+                      </span>
+                    </li>
+                    <li>
+                      <b>On Android (Chrome):</b>
+                      <span className="substep">
+                        Tap the <b>lock</b> (or <b>tune</b>) icon in the
+                        address bar → <b>Permissions</b> →{" "}
+                        <b>Local network</b> → <b>Allow</b>. Then reload.
+                      </span>
+                    </li>
+                    <li>
+                      <b>On a computer (Chrome):</b>
+                      <span className="substep">
+                        Settings → Privacy and security → Site settings →
+                        Additional permissions → <b>Local network access</b>{" "}
+                        → set this site to <b>Allow</b>. Then reload.
+                      </span>
+                    </li>
+                  </ol>
+                </>
+              )}
+
               <div className="tools" style={{ marginTop: 10 }}>
                 <button onClick={() => window.location.reload()}>
                   Reload page
