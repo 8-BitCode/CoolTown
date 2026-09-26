@@ -69,6 +69,12 @@ function fromHex(h) {
 }
 
 const btOk = typeof navigator !== "undefined" && "bluetooth" in navigator;
+const isIOS =
+  typeof navigator !== "undefined" &&
+  (/iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    // iPadOS 13+ reports itself as a Mac in the UA string; the touch check
+    // is the standard way to tell it apart from an actual Mac.
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1));
 const isBlank = (p) => !p || p.every((v) => !v);
 
 // Rough classifier for "this wasn't a normal HTTP error, the browser
@@ -242,6 +248,14 @@ export default function App() {
   // ---- Network help panel (WiFi path only) ----
   const [showNetworkHelp, setShowNetworkHelp] = useState(false);
 
+  // ---- Reduced "just open the pendant's page" view ----
+  // Shown automatically on iOS (BLE is impossible there and the WiFi
+  // canvas's cross-origin fetch is unreliable on Safari), or manually by
+  // anyone who taps "Nothing happening?" on the WiFi page. Distinct from
+  // wifiMode: this hides the canvas entirely rather than just switching
+  // transport.
+  const [showFallbackPage, setShowFallbackPage] = useState(isIOS);
+
   // ---- Pendant hotspot detection (WiFi path only) ----
   const [wifiDetected, setWifiDetected] = useState(false);
 
@@ -271,9 +285,13 @@ export default function App() {
   }, [px]);
 
   // Background poll for the pendant's hotspot. Purely to know whether the
-  // Connect button should be live on the WiFi path.
+  // Connect button should be live on the WiFi path. Skipped on iOS - a
+  // script-initiated fetch to a local IP from this page's origin is
+  // exactly what triggers Safari's flaky Local Network permission prompt,
+  // and the iOS branch below never uses wifiDetected to gate anything
+  // that matters (it just shows a static waiting message).
   useEffect(() => {
-    if (transport) return;
+    if (transport || isIOS) return;
     let cancelled = false;
     const tick = async () => {
       try {
@@ -683,6 +701,53 @@ export default function App() {
       <style>{css}</style>
       <div className="wrap">
         <h1>CoolTown avatar</h1>
+        {showFallbackPage ? (
+          <>
+            <p className="sub">Send an avatar to your pendant over WiFi.</p>
+
+            <div className="hint" style={{ marginBottom: 16 }}>
+              <b>How to send</b>
+              <ol className="steps">
+                <li>
+                  On the pendant, scroll <b>down</b> with the wheel to reach
+                  the <b>Avatars</b> screen.
+                </li>
+                <li>
+                  <b>Press the wheel in</b> to start pairing, then scroll{" "}
+                  <b>up</b> to switch it to WiFi.
+                </li>
+                <li>
+                  On this device, join the WiFi network called{" "}
+                  <b>CoolTown-XXXX</b>.
+                </li>
+                <li>
+                  A <b>"Sign in to Network"</b> screen should pop up on its
+                  own - tap it to draw and send your avatar.
+                </li>
+              </ol>
+            </div>
+
+            <button
+              className="go"
+              onClick={() => {
+                window.location.href = wifiUrl("/");
+              }}
+            >
+              Didn't see a popup? Tap here instead
+            </button>
+
+            {!isIOS && (
+              <button
+                className="link"
+                onClick={() => setShowFallbackPage(false)}
+                style={{ marginTop: 10 }}
+              >
+                ← Back to the drawing page
+              </button>
+            )}
+          </>
+        ) : (
+          <>
         <p className="sub">Draw a 32×32 avatar, then send it to the pendant.</p>
 
         <div className="hint" style={{ marginBottom: 16 }}>
@@ -796,6 +861,14 @@ export default function App() {
                     Waiting for the pendant's WiFi network. Join{" "}
                     <b>CoolTown-XXXX</b> in your device's WiFi settings.
                   </div>
+                )}
+                {useWifi && (
+                  <button
+                    className="link"
+                    onClick={() => setShowFallbackPage(true)}
+                  >
+                    Nothing happening? Open the pendant's page directly →
+                  </button>
                 )}
               </>
             )}
@@ -920,6 +993,8 @@ export default function App() {
 
         <div className="lbl" style={{ margin: "20px 0 6px" }}>Log</div>
         <pre>{log.join("\n")}</pre>
+          </>
+        )}
       </div>
     </>
   );
