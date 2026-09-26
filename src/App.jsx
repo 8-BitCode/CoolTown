@@ -18,6 +18,35 @@ const GHOST_ERASE = "rgba(217,79,43,0.28)";
 const AVATAR_SERVICE_UUID = "c0017000-1234-5678-9abc-def012345678";
 const AVATAR_CHAR_UUID    = "c0017001-1234-5678-9abc-def012345678";
 
+// Tiny pixel-art gem, drawn the same way an avatar is: a grid of on/off
+// cells. Sits next to the page title as the one bit of "hero" decoration -
+// a small nod to the pendant itself rather than a generic logo mark.
+const GEM_GLYPH = [
+  "0001000",
+  "0011100",
+  "0111110",
+  "1111111",
+  "0111110",
+  "0011100",
+  "0001000",
+];
+function GemMark() {
+  const s = 4;
+  const w = GEM_GLYPH[0].length * s;
+  const h = GEM_GLYPH.length * s;
+  return (
+    <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} aria-hidden="true">
+      {GEM_GLYPH.flatMap((row, y) =>
+        Array.from(row).map((v, x) =>
+          v === "1" ? (
+            <rect key={`${x}-${y}`} x={x * s} y={y * s} width={s} height={s} fill="currentColor" />
+          ) : null
+        )
+      )}
+    </svg>
+  );
+}
+
 // While the pendant is in Pairing mode it also runs its own open WiFi
 // hotspot at this fixed address (see startPairingAP() in the firmware).
 const WIFI_HOST = "192.168.4.1";
@@ -103,29 +132,76 @@ function MiniAvatar({ pixels }) {
 }
 
 const css = `
-  :root { --paper:#e8e4d8; --ink:#141414; --accent:#d94f2b; --mute:#7a766b; }
+  :root {
+    --bg: #e2dcc6;
+    --paper: #f8f4e6;
+    --ink: #18140d;
+    --ink-rgb: 24,20,13;
+    --accent: #d5481f;
+    --accent-soft: rgba(213,72,31,.10);
+    --led: #6f9c45;
+    --led-dim: #b7b09b;
+    --mute: #756f5e;
+    --line: #d3c9ac;
+    --console: #b8e08a;
+  }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-  body { margin:0; background:var(--paper); color:var(--ink);
-    font-family:'Courier New',ui-monospace,monospace; }
-  .wrap { max-width:860px; margin:0 auto; padding:28px 20px;
+  body { margin:0; background:var(--bg); color:var(--ink);
+    font-family:'IBM Plex Mono','Courier New',ui-monospace,monospace; }
+  .wrap { max-width:900px; margin:0 auto; padding:32px 20px 40px;
     padding-left:max(20px, env(safe-area-inset-left));
     padding-right:max(20px, env(safe-area-inset-right));
-    padding-bottom:max(28px, env(safe-area-inset-bottom)); }
-  h1 { font-size:34px; letter-spacing:-1px; margin:0 0 4px; }
-  .sub { color:var(--mute); margin:0 0 20px; }
+    padding-bottom:max(40px, env(safe-area-inset-bottom)); }
+
+  /* ---- Header: title + a tiny pixel-gem mark, the one hero touch ---- */
+  .head { display:flex; align-items:flex-start; gap:12px; }
+  .mark { flex:0 0 auto; margin-top:8px; color:var(--accent); }
+  h1 { font-size:32px; font-weight:700; letter-spacing:-0.5px; margin:0 0 4px; line-height:1.1; }
+  .sub { color:var(--mute); margin:0 0 22px; font-size:14px; }
+
   .row { display:flex; gap:24px; flex-wrap:wrap; align-items:flex-start; }
   .stage { flex:1 1 320px; max-width:512px; width:100%; }
-  canvas.grid { width:100%; height:auto; aspect-ratio:1; display:block; border:3px solid var(--ink);
+  .side { flex:1 1 240px; display:flex; flex-direction:column; min-width:0; }
+
+  /* ---- Canvas bezel: the drawing surface reads as the pendant's own
+     screen sitting in a molded case, with corner screws and a live
+     status LED bound to the real connected state. ---- */
+  .bezel { position:relative; padding:14px; background:var(--paper);
+    border:2px solid var(--ink); box-shadow:4px 4px 0 var(--line); }
+  .screw { position:absolute; width:6px; height:6px; border-radius:50%;
+    background:var(--mute); opacity:.45; }
+  .screw.tl { top:9px; left:9px; } .screw.tr { top:9px; right:9px; }
+  .screw.bl { bottom:9px; left:9px; } .screw.br { bottom:9px; right:9px; }
+  .led { position:absolute; top:10px; right:22px; width:9px; height:9px;
+    border-radius:50%; background:var(--led-dim); box-shadow:0 0 0 2px var(--paper); }
+  .led.on { background:var(--led); box-shadow:0 0 0 2px var(--paper), 0 0 6px 1px rgba(111,156,69,.75); }
+  canvas.grid { width:100%; height:auto; aspect-ratio:1; display:block; border:2px solid var(--ink);
     background:#fff; touch-action:none; user-select:none; -webkit-user-select:none;
     -webkit-touch-callout:none; cursor:crosshair; }
-  .side { flex:1 1 220px; display:flex; flex-direction:column; gap:10px; min-width:0; }
-  .tools { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+
+  /* ---- Buttons: hard offset shadow + press-down, like a stamped
+     enclosure button rather than a soft SaaS card. ---- */
   button { font:inherit; min-height:44px; padding:9px 12px; background:var(--paper); color:var(--ink);
-    border:2px solid var(--ink); cursor:pointer; text-align:left; }
-  button:active:not(:disabled) { background:var(--ink); color:var(--paper); }
-  button.on { background:var(--ink); color:var(--paper); }
-  button.go { background:var(--accent); border-color:var(--accent); color:#fff; }
-  button:disabled { opacity:.4; cursor:not-allowed; }
+    border:2px solid var(--ink); cursor:pointer; text-align:left;
+    box-shadow:3px 3px 0 var(--ink);
+    transition: transform .05s ease, box-shadow .05s ease, background .12s ease, color .12s ease; }
+  button:active:not(:disabled) { background:var(--ink); color:var(--paper);
+    transform:translate(3px,3px); box-shadow:0 0 0 var(--ink); }
+  button.on { background:var(--ink); color:var(--paper); box-shadow:3px 3px 0 var(--accent); }
+  button.go { background:var(--accent); border-color:var(--ink); color:#fff; }
+  button:disabled { opacity:.4; cursor:not-allowed; box-shadow:none; }
+  .tools { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+
+  /* ---- Panels: bordered groups with the label cut into the top
+     border, like a nameplate engraved on a spec sheet. ---- */
+  .panel { position:relative; background:var(--paper); border:2px solid var(--ink);
+    padding:16px 14px 14px; margin-top:20px; }
+  .panel:first-child { margin-top:0; }
+  .panel-tag { position:absolute; top:-9px; left:10px; background:var(--bg);
+    padding:0 6px; font-size:11px; text-transform:uppercase; letter-spacing:2px;
+    font-weight:600; color:var(--mute); }
+  .panel > *:not(.panel-tag) + * { margin-top:10px; }
+
   .lbl { font-size:12px; text-transform:uppercase; letter-spacing:2px; color:var(--mute); margin-top:6px; }
   .prev { border:2px solid var(--ink); background:#fff; image-rendering:pixelated;
     width:64px; height:64px; align-self:flex-start; }
@@ -147,16 +223,21 @@ const css = `
   .help ol { margin:6px 0 6px 18px; padding:0; }
   .help ol li { margin:6px 0; }
   .help .substep { display:block; color:var(--mute); font-size:12px; margin-top:2px; }
-  .help code { background:rgba(20,20,20,.08); padding:1px 4px; font-size:12px; }
+  .help code { background:rgba(var(--ink-rgb),.08); padding:1px 4px; font-size:12px; }
 
   /* Quiet secondary link-style button used under the primary actions. */
   .link { background:none; border:none; padding:4px 0; min-height:0;
     color:var(--mute); font-size:12px; text-decoration:underline;
-    text-underline-offset:2px; text-align:left; }
-  .link:active { background:none; color:var(--accent); }
+    text-underline-offset:2px; text-align:left; box-shadow:none; }
+  .link:active { background:none; color:var(--accent); transform:none; box-shadow:none; }
 
   /* Small muted caption under a disabled control. */
   .caption { font-size:12px; color:var(--mute); line-height:1.4; }
+
+  /* Live connection line: small LED dot + status text. */
+  .status { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--mute); }
+  .status .dot { width:7px; height:7px; border-radius:50%; flex:0 0 auto;
+    background:var(--led); box-shadow:0 0 5px 1px rgba(111,156,69,.65); }
 
   /* ---- Conflict resolution: "which avatar wins?" ----
      The two previews are the buttons. A padded, transparent-bordered frame
@@ -166,12 +247,12 @@ const css = `
      and just gains the accent on hover. */
   .choice-row { display:flex; gap:12px; flex-wrap:wrap; }
   .choice { display:flex; flex-direction:column; gap:6px; align-items:flex-start;
-    padding:8px; background:none; border:2px solid transparent;
+    padding:8px; background:none; border:2px solid transparent; box-shadow:none;
     cursor:pointer; text-align:left; min-height:0;
     transition: border-color .12s ease, background .12s ease; }
   .choice:hover, .choice:focus-visible {
-    border-color: var(--accent); background: rgba(217,79,43,.08); outline:none; }
-  .choice:active { background: rgba(217,79,43,.18); }
+    border-color: var(--accent); background: var(--accent-soft); outline:none; }
+  .choice:active { background: rgba(213,72,31,.18); transform:none; box-shadow:none; }
   /* The inner preview's own border also goes accent on hover, so the
      highlight reads as one continuous frame rather than a floating box. */
   .choice:hover .prev, .choice:focus-visible .prev { border-color: var(--accent); }
@@ -186,9 +267,11 @@ const css = `
   .brush { display:flex; align-items:center; gap:8px; min-height:44px;
     padding:6px 10px; background:var(--paper); color:var(--ink);
     border:2px solid var(--ink); cursor:pointer; font:inherit;
-    text-align:left; }
-  .brush:active:not(:disabled) { background:var(--ink); color:var(--paper); }
-  .brush.on { background:var(--ink); color:var(--paper); }
+    text-align:left; box-shadow:3px 3px 0 var(--ink);
+    transition: transform .05s ease, box-shadow .05s ease, background .12s ease, color .12s ease; }
+  .brush:active:not(:disabled) { background:var(--ink); color:var(--paper);
+    transform:translate(3px,3px); box-shadow:0 0 0 var(--ink); }
+  .brush.on { background:var(--ink); color:var(--paper); box-shadow:3px 3px 0 var(--accent); }
   .brush-swatch { display:inline-flex; align-items:center; justify-content:center;
     width:22px; height:22px; border:1px solid currentColor; flex:0 0 auto; }
   .brush-dot { display:block; background:currentColor; }
@@ -200,16 +283,17 @@ const css = `
   .steps { list-style:none; margin:4px 0 0; padding:0; }
   .steps li { position:relative; padding:7px 0 7px 22px;
     font-size:14px; line-height:1.45; }
-  .steps li:not(:last-child) { border-bottom:1px dashed #ccc; }
+  .steps li:not(:last-child) { border-bottom:1px dashed var(--line); }
   .steps li::before { content:"•"; position:absolute; left:0; top:7px;
     color:var(--accent); font-size:20px; font-weight:bold; line-height:1.2; }
   input { font:inherit; font-size:16px; min-height:44px; width:100%; padding:8px;
     border:2px solid var(--ink); background:#fff; color:var(--ink); }
-  pre { background:var(--ink); color:#b8e08a; padding:10px; height:130px; overflow:auto;
-    font-size:12px; margin:0; white-space:pre-wrap; word-break:break-word; }
+  pre { background:var(--ink); color:var(--console); padding:10px; height:130px; overflow:auto;
+    font-size:12px; margin:0; white-space:pre-wrap; word-break:break-word;
+    border:2px solid var(--ink); }
   @media (max-width:560px) {
-    h1 { font-size:26px; }
-    .wrap { padding-top:16px; }
+    h1 { font-size:25px; }
+    .wrap { padding-top:20px; }
   }
 `;
 
@@ -700,7 +784,10 @@ export default function App() {
     <>
       <style>{css}</style>
       <div className="wrap">
-        <h1>CoolTown avatar</h1>
+        <div className="head">
+          <span className="mark"><GemMark /></span>
+          <h1>CoolTown avatar</h1>
+        </div>
         {showFallbackPage ? (
           <>
             <p className="sub">Send an avatar to your pendant over WiFi.</p>
@@ -740,7 +827,7 @@ export default function App() {
               <button
                 className="link"
                 onClick={() => setShowFallbackPage(false)}
-                style={{ marginTop: 10 }}
+                style={{ marginTop: 10, display: "block" }}
               >
                 ← Back to the drawing page
               </button>
@@ -782,21 +869,33 @@ export default function App() {
 
         <div className="row">
           <div className="stage">
-            <canvas
-              ref={canvasRef}
-              className="grid"
-              width={N * CELL}
-              height={N * CELL}
-              onContextMenu={(e) => e.preventDefault()}
-              onPointerDown={startStroke}
-              onPointerMove={(e) => {
-                updateHover(e);
-                if (drawing.current) paint(e);
-              }}
-              onPointerUp={stop}
-              onPointerCancel={stop}
-              onPointerLeave={() => setHover(null)}
-            />
+            <div className="bezel">
+              <span className="screw tl" aria-hidden="true" />
+              <span className="screw tr" aria-hidden="true" />
+              <span className="screw bl" aria-hidden="true" />
+              <span className="screw br" aria-hidden="true" />
+              <span
+                className={`led ${connected ? "on" : ""}`}
+                role="img"
+                aria-label={connected ? "Pendant connected" : "Pendant not connected"}
+                title={connected ? "Connected" : "Not connected"}
+              />
+              <canvas
+                ref={canvasRef}
+                className="grid"
+                width={N * CELL}
+                height={N * CELL}
+                onContextMenu={(e) => e.preventDefault()}
+                onPointerDown={startStroke}
+                onPointerMove={(e) => {
+                  updateHover(e);
+                  if (drawing.current) paint(e);
+                }}
+                onPointerUp={stop}
+                onPointerCancel={stop}
+                onPointerLeave={() => setHover(null)}
+              />
+            </div>
             <div className="brush-section">
               <div className="lbl">Brush size</div>
               <div className="brush-row">
@@ -821,23 +920,29 @@ export default function App() {
             </div>
           </div>
           <div className="side">
-            <div className="lbl">Tools</div>
-            <div className="tools">
-              <button className={tool ? "on" : ""} onClick={() => setTool(1)}>Draw</button>
-              <button className={!tool ? "on" : ""} onClick={() => setTool(0)}>Erase</button>
-              <button className={mirror ? "on" : ""} onClick={() => setMirror(!mirror)}>
-                Mirror: {mirror ? "on" : "off"}
-              </button>
-              <button onClick={undo} disabled={!history.length}>
-                Undo ({history.length})
-              </button>
-              <button onClick={doInvert}>Invert</button>
-              <button onClick={doClear}>Clear</button>
+            <div className="panel">
+              <div className="panel-tag">Tools</div>
+              <div className="tools">
+                <button className={tool ? "on" : ""} onClick={() => setTool(1)}>Draw</button>
+                <button className={!tool ? "on" : ""} onClick={() => setTool(0)}>Erase</button>
+                <button className={mirror ? "on" : ""} onClick={() => setMirror(!mirror)}>
+                  Mirror: {mirror ? "on" : "off"}
+                </button>
+                <button onClick={undo} disabled={!history.length}>
+                  Undo ({history.length})
+                </button>
+                <button onClick={doInvert}>Invert</button>
+                <button onClick={doClear}>Clear</button>
+              </div>
             </div>
-            <div className="lbl">Preview</div>
-            <canvas ref={prevRef} className="prev" width={N} height={N} />
 
-            <div className="lbl">Pendant</div>
+            <div className="panel">
+              <div className="panel-tag">Preview</div>
+              <canvas ref={prevRef} className="prev" width={N} height={N} />
+            </div>
+
+            <div className="panel">
+              <div className="panel-tag">Pendant</div>
 
             {notice && (
               <div className="notice" role="status" aria-live="polite">
@@ -906,7 +1011,8 @@ export default function App() {
               <>
                 <button className="go" onClick={send}>Send again</button>
                 <button onClick={disconnect}>Disconnect</button>
-                <div style={{ fontSize: 12, color: "var(--mute)" }}>
+                <div className="status">
+                  <span className="dot" aria-hidden="true" />
                   Connected: {deviceName} ({transport === "ble" ? "Bluetooth" : "WiFi"})
                 </div>
               </>
@@ -973,21 +1079,24 @@ export default function App() {
                 Back to Bluetooth
               </button>
             )}
-
-            <div className="lbl">Move between devices</div>
-            <div className="tools">
-              <button onClick={() => copy(link, "link")}>Copy link</button>
-              <button onClick={() => copy(code, "code")}>Copy code</button>
             </div>
-            <input
-              value={codeIn}
-              onChange={(e) => setCodeIn(e.target.value)}
-              placeholder="Paste a code or link"
-              autoCapitalize="off"
-              autoCorrect="off"
-              spellCheck={false}
-            />
-            <button onClick={loadCode} disabled={!codeIn}>Load</button>
+
+            <div className="panel">
+              <div className="panel-tag">Transfer</div>
+              <div className="tools">
+                <button onClick={() => copy(link, "link")}>Copy link</button>
+                <button onClick={() => copy(code, "code")}>Copy code</button>
+              </div>
+              <input
+                value={codeIn}
+                onChange={(e) => setCodeIn(e.target.value)}
+                placeholder="Paste a code or link"
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
+              />
+              <button onClick={loadCode} disabled={!codeIn}>Load</button>
+            </div>
           </div>
         </div>
 
