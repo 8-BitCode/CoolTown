@@ -149,6 +149,31 @@ const css = `
     text-underline-offset:2px; text-align:left; }
   .link:active { background:none; color:var(--accent); }
 
+  /* Small muted caption under a disabled control. */
+  .caption { font-size:12px; color:var(--mute); line-height:1.4; }
+
+  /* ---- Conflict resolution: "which avatar wins?" ----
+     The two previews are the buttons. A padded, transparent-bordered frame
+     wraps each so the tap area extends past the canvas itself, and hover /
+     focus lights that frame in the accent so it's obvious which one a tap
+     will pick. The action label always shows (so touch users see it too)
+     and just gains the accent on hover. */
+  .choice-row { display:flex; gap:12px; flex-wrap:wrap; }
+  .choice { display:flex; flex-direction:column; gap:6px; align-items:flex-start;
+    padding:8px; background:none; border:2px solid transparent;
+    cursor:pointer; text-align:left; min-height:0;
+    transition: border-color .12s ease, background .12s ease; }
+  .choice:hover, .choice:focus-visible {
+    border-color: var(--accent); background: rgba(217,79,43,.08); outline:none; }
+  .choice:active { background: rgba(217,79,43,.18); }
+  /* The inner preview's own border also goes accent on hover, so the
+     highlight reads as one continuous frame rather than a floating box. */
+  .choice:hover .prev, .choice:focus-visible .prev { border-color: var(--accent); }
+  .choice-action { font-size:11px; text-transform:uppercase;
+    letter-spacing:1.5px; color:var(--mute); transition: color .12s ease; }
+  .choice:hover .choice-action, .choice:focus-visible .choice-action {
+    color: var(--accent); font-weight:bold; }
+
   /* Brush-size picker under the canvas. */
   .brush-section { margin-top:14px; }
   .brush-row { display:flex; gap:8px; flex-wrap:wrap; }
@@ -206,17 +231,16 @@ export default function App() {
   const noticeTimer = useRef(null);
 
   // ---- WiFi mode ----
-  // On a browser without Web Bluetooth (iOS Safari, Firefox) the page is
-  // always in WiFi mode. On Chrome it starts in Bluetooth mode, but the
-  // user can opt into WiFi via the "Having problems?" link, which flips
-  // the whole page into the WiFi variant - same hint, same transport, same
-  // local-network permission UI a non-Bluetooth browser would see.
   const [wifiMode, setWifiMode] = useState(false);
+  const [showWifiHelp, setShowWifiHelp] = useState(false);
   const useWifi = !btOk || wifiMode;
 
   // ---- Local-network access (WiFi path only) ----
   const [lnaState, setLnaState] = useState("checking"); // checking | granted | prompt | denied | unsupported
   const [showNetworkHelp, setShowNetworkHelp] = useState(false);
+
+  // ---- Pendant hotspot detection (WiFi path only) ----
+  const [wifiDetected, setWifiDetected] = useState(false);
 
   const clearNotice = () => {
     if (noticeTimer.current) {
@@ -239,15 +263,12 @@ export default function App() {
     if (noticeTimer.current) clearTimeout(noticeTimer.current);
   }, []);
 
-  // As soon as there's something on the canvas, the "it's blank" complaint
-  // is stale - drop it right away rather than waiting out the timer.
   useEffect(() => {
     if (!isBlank(px) && noticeTimer.current) clearNotice();
   }, [px]);
 
   // Query the local-network-access permission on mount, and again whenever
-  // the tab regains focus or the user flips into WiFi mode. Only meaningful
-  // on the WiFi path.
+  // the tab regains focus or the user flips into WiFi mode.
   useEffect(() => {
     if (!useWifi) return;
     let cancelled = false;
@@ -264,7 +285,7 @@ export default function App() {
         });
         if (cancelled) return;
         statusRef = status;
-        setLnaState(status.state);   // "granted" | "prompt" | "denied"
+        setLnaState(status.state);
         status.onchange = () => {
           if (!cancelled) setLnaState(status.state);
         };
@@ -282,9 +303,23 @@ export default function App() {
     };
   }, [useWifi]);
 
-  // Called by the "Allow local network access" button. A plain fetch() to
-  // the pendant's private IP is what causes the browser to show its own
-  // dialog - there is no dedicated request API.
+  // Background poll for the pendant's hotspot.
+  useEffect(() => {
+    if (transport) return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        await fetchWithTimeout(wifiUrl("/avatar"), {}, 1200);
+        if (!cancelled) setWifiDetected(true);
+      } catch {
+        if (!cancelled) setWifiDetected(false);
+      }
+    };
+    tick();
+    const id = setInterval(tick, 2500);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [transport]);
+
   const requestLocalNetwork = async () => {
     if (lnaState === "denied") {
       setShowNetworkHelp(true);
@@ -334,7 +369,6 @@ export default function App() {
       p.fillRect(x, y, 1, 1);
     });
 
-    // ---- Hover ghost ----
     if (hover) {
       const size = brushSize;
       const half = Math.floor((size - 1) / 2);
@@ -370,7 +404,6 @@ export default function App() {
     setHover((h) => (h && h[0] === x && h[1] === y ? h : [x, y]));
   };
 
-  // ---- Undo helpers ----
   const snapshot = (current) => {
     setHistory((h) => {
       const next = [...h, current];
@@ -430,7 +463,6 @@ export default function App() {
   const doClear = () => { snapshot(px); setPx(blank()); };
   const doInvert = () => { snapshot(px); setPx(px.map((v) => 1 - v)); };
 
-  // ---- BLE ----
   const sendFrame = async (ch, pixels) => {
     const data = pack(pixels);
     let sum = 0;
@@ -531,7 +563,6 @@ export default function App() {
     addLog("Disconnected.");
   };
 
-  // Shared by both transports right after a successful connect.
   const resolveAfterConnect = (loaded, transportName) => {
     const canvasBlank = isBlank(pxRef.current);
 
@@ -563,7 +594,6 @@ export default function App() {
     } catch {}
   };
 
-  // ---- WiFi ----
   const wifiGetAvatar = async () => {
     const r = await fetchWithTimeout(wifiUrl("/avatar"), {}, 1500);
     if (!r.ok) throw new Error("HTTP " + r.status);
@@ -613,27 +643,13 @@ export default function App() {
     addLog("Disconnected.");
   };
 
-  const [wifiDetected, setWifiDetected] = useState(false);
-  useEffect(() => {
-    if (transport) return;
-    let cancelled = false;
-    const tick = async () => {
-      try {
-        await fetchWithTimeout(wifiUrl("/avatar"), {}, 1200);
-        if (!cancelled) setWifiDetected(true);
-      } catch {
-        if (!cancelled) setWifiDetected(false);
-      }
-    };
-    tick();
-    const id = setInterval(tick, 2500);
-    return () => { cancelled = true; clearInterval(id); };
-  }, [transport]);
+  const canConnect = useWifi ? wifiDetected : true;
 
-  // On the WiFi path we go straight to WiFi regardless of whether the
-  // pendant's hotspot has been detected yet - the log message on failure is
-  // the useful feedback, not a disabled button.
   const connectPendant = () => {
+    if (!canConnect) {
+      addLog("Pendant hotspot not detected - make sure you've joined the CoolTown-XXXX network.");
+      return;
+    }
     if (!useWifi) return connectBT();
     return connectWifi();
   };
@@ -714,8 +730,6 @@ export default function App() {
     else addLog("That code isn't valid (needs 256 hex characters).");
   };
 
-  // Flipping into WiFi mode rebuilds the page as the WiFi variant: hint
-  // changes, Connect uses WiFi, LNA UI appears.
   const enterWifiMode = () => {
     setWifiMode(true);
     setShowWifiHelp(true);
@@ -728,8 +742,6 @@ export default function App() {
     setShowNetworkHelp(false);
     addLog("Back to Bluetooth mode.");
   };
-
-  const [showWifiHelp, setShowWifiHelp] = useState(false);
 
   return (
     <>
@@ -807,7 +819,6 @@ export default function App() {
 
             <div className="lbl">Pendant</div>
 
-            {/* Blank-canvas / status banner. */}
             {notice && (
               <div className="notice" role="status" aria-live="polite">
                 {notice}
@@ -815,29 +826,57 @@ export default function App() {
             )}
 
             {!connected && (
-              <button className="go" onClick={connectPendant}>
-                Connect &amp; send
-              </button>
+              <>
+                <button
+                  className="go"
+                  onClick={connectPendant}
+                  disabled={!canConnect}
+                  style={{ opacity: canConnect ? 1 : 0.3 }}
+                  title={canConnect ? "" : "Waiting for the pendant's WiFi network"}
+                >
+                  Connect &amp; send
+                </button>
+                {useWifi && !wifiDetected && (
+                  <div className="caption">
+                    Waiting for the pendant's WiFi network. Join{" "}
+                    <b>CoolTown-XXXX</b> in your device's WiFi settings.
+                  </div>
+                )}
+              </>
             )}
+
             {connected && conflict && (
-              <div className="hint" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <div className="hint" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                 <b>Pendant already has an avatar, and you've drawn one too.</b>
-                <div style={{ display: "flex", gap: 20 }}>
-                  <div>
+                <div style={{ fontSize: 12, color: "var(--mute)" }}>
+                  Tap the one you want to keep.
+                </div>
+                {/* The two previews are themselves the buttons. Hover (or
+                    keyboard focus) lights up an accent frame around whichever
+                    one you're about to pick. */}
+                <div className="choice-row">
+                  <button
+                    className="choice"
+                    onClick={keepMine}
+                    aria-label="Keep my avatar and send it to the pendant"
+                  >
                     <div className="lbl" style={{ marginTop: 0 }}>Yours</div>
                     <MiniAvatar pixels={px} />
-                  </div>
-                  <div>
+                    <div className="choice-action">Keep this</div>
+                  </button>
+                  <button
+                    className="choice"
+                    onClick={usePendantAvatar}
+                    aria-label="Load the pendant's avatar into the editor"
+                  >
                     <div className="lbl" style={{ marginTop: 0 }}>Pendant's</div>
                     <MiniAvatar pixels={conflict.avatar} />
-                  </div>
-                </div>
-                <div className="tools">
-                  <button className="go" onClick={keepMine}>Keep mine</button>
-                  <button onClick={usePendantAvatar}>Edit pendant's</button>
+                    <div className="choice-action">Use this</div>
+                  </button>
                 </div>
               </div>
             )}
+
             {connected && !conflict && (
               <>
                 <button className="go" onClick={send}>Send again</button>
@@ -848,8 +887,6 @@ export default function App() {
               </>
             )}
 
-            {/* WiFi-mode-specific UI. Same block a non-Bluetooth browser
-                sees, surfaced here on Chrome once the user opts into WiFi. */}
             {useWifi && (lnaState === "prompt" || lnaState === "denied") && !showNetworkHelp && !connected && (
               <button className="go" onClick={requestLocalNetwork}>
                 {lnaState === "denied"
@@ -905,9 +942,6 @@ export default function App() {
               </button>
             )}
 
-            {/* Bluetooth-mode-only controls: enter WiFi mode, or (once in
-                WiFi mode) go back to Bluetooth. Only rendered on a browser
-                that actually supports BLE. */}
             {btOk && !useWifi && !connected && (
               <button className="link" onClick={enterWifiMode}>
                 Having problems? Try connecting via WiFi
