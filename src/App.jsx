@@ -17,6 +17,21 @@ function pack(px) {
       if (px[y * N + x]) out[y * 4 + (x >> 3)] |= 1 << (7 - (x & 7));
   return out;
 }
+// Inverse of pack(): turn 128 raw avatar bytes back into a pixel array.
+function unpack(bytes) {
+  const px = blank();
+  for (let y = 0; y < N; y++)
+    for (let x = 0; x < N; x++)
+      if (bytes[y * 4 + (x >> 3)] & (1 << (7 - (x & 7)))) px[y * N + x] = 1;
+  return px;
+}
+// The pendant's characteristic value is [hasAvatar flag, ...128 avatar bytes].
+// Returns a pixel array if the pendant already has an avatar set, else null.
+function unpackFrame(bytes) {
+  if (!bytes || bytes.length < 1 + 128) return null;
+  if (bytes[0] !== 1) return null;
+  return unpack(bytes.slice(1, 1 + 128));
+}
 const toHex = (b) => Array.from(b, (v) => v.toString(16).padStart(2, "0")).join("");
 function fromHex(h) {
   const c = (h || "").replace(/[^0-9a-f]/gi, "");
@@ -244,10 +259,28 @@ export default function App() {
       setDeviceName(device.name || "pendant");
       addLog("Connected via Bluetooth.");
 
-      // Auto-send right after connecting, so the user only clicks once.
-      addLog("> sending avatar...");
-      await sendFrame(ch, px);
-      addLog("> sent 131 bytes over BLE");
+      // Check whether the pendant already has an avatar before doing anything
+      // to it: if it does, load it onto the canvas so the user can edit their
+      // existing design instead of silently overwriting it.
+      let loaded = null;
+      try {
+        const val = await ch.readValue();
+        const bytes = new Uint8Array(val.buffer, val.byteOffset, val.byteLength);
+        loaded = unpackFrame(bytes);
+      } catch (err) {
+        addLog("Couldn't check for an existing avatar (" + err.message + ") - sending current design.");
+      }
+
+      if (loaded) {
+        snapshot(px);
+        setPx(loaded);
+        addLog("Pendant already has an avatar - loaded it here for editing. Make your changes, then tap 'Send again'.");
+      } else {
+        // Nothing on the pendant yet (or we couldn't read it) - send what's on screen.
+        addLog("> sending avatar...");
+        await sendFrame(ch, px);
+        addLog("> sent 131 bytes over BLE");
+      }
     } catch (err) {
       if (err.name === "NotFoundError") {
         addLog(
@@ -298,13 +331,20 @@ export default function App() {
       <style>{css}</style>
       <div className="wrap">
         <h1>CoolTown avatar</h1>
-        <p className="sub">Draw a 32×32 avatar, then send it to the pendant over Bluetooth.</p>
+        <p className="sub">Draw a 32×32 avatar, then send it to the pendant.</p>
 
         <div className="hint" style={{ marginBottom: 16 }}>
           <b>How to send:</b> on the pendant, go to <b>Avatars</b> and press{" "}
-          <b>MID</b> so the display shows <b>PAIRING…</b> with a blinking square,
-          then tap <b>Connect Bluetooth</b> below. The avatar is sent automatically
-          once connected.
+          <b>MID</b> so the display shows <b>PAIRING…</b> with a blinking square.
+          {btOk ? (
+            <> Then tap <b>Connect &amp; send</b> below. If the pendant doesn't
+            have an avatar yet, whatever's on screen here is sent automatically.
+            If it already has one, that avatar is loaded here first so you can
+            edit it instead of overwriting it - tap "Send again" when you're ready.</>
+          ) : (
+            <> This browser can't do direct Bluetooth, but the pendant also runs
+            its own WiFi hotspot while pairing - see below.</>
+          )}
         </div>
 
         <div className="row">
@@ -341,15 +381,18 @@ export default function App() {
             <div className="lbl">Pendant</div>
             {!btOk && (
               <div className="note">
-                This browser doesn't support Web Bluetooth. On Samsung you need
-                <b> Chrome</b> (Samsung Internet won't work). Open this page in
-                Chrome, make sure the site is served over HTTPS, and grant the
-                Nearby Devices / Bluetooth permission when asked.
+                No Web Bluetooth here (expected on iPhone/Safari, Firefox, etc) -
+                no problem, no app needed. Put the pendant in <b>Pairing</b> mode,
+                then on this device go to <b>WiFi settings</b> and join the
+                network named <b>CoolTown-XXXX</b> (shown on the pendant's
+                screen, no password). Then open{" "}
+                <b>http://192.168.4.1</b> in your browser - the pendant serves
+                its own draw-and-send page there.
               </div>
             )}
-            {!connected
+            {btOk && (!connected
               ? (
-                <button className="go" onClick={connectBT} disabled={!btOk}>
+                <button className="go" onClick={connectBT}>
                   Connect &amp; send
                 </button>
               )
@@ -361,7 +404,7 @@ export default function App() {
                     Connected: {deviceName}
                   </div>
                 </>
-              )}
+              ))}
 
             <div className="lbl">Move between devices</div>
             <div className="tools">
