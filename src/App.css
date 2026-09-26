@@ -1,0 +1,432 @@
+/* ============================================================
+   CoolTown avatar editor
+   ============================================================ */
+
+:root {
+  --paper:  #e8e4d8;
+  --ink:    #141414;
+  --accent: #d94f2b;
+  --mute:   #7a766b;
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: 'Courier New', ui-monospace, monospace;
+}
+
+/* ------------------------------------------------------------
+   Layout
+   ------------------------------------------------------------ */
+
+.wrap {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 28px 20px;
+  padding-left:  max(20px, env(safe-area-inset-left));
+  padding-right: max(20px, env(safe-area-inset-right));
+  padding-bottom: max(28px, env(safe-area-inset-bottom));
+}
+
+.row {
+  display: flex;
+  gap: 24px;
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+
+.stage {
+  flex: 1 1 320px;
+  max-width: 512px;
+  width: 100%;
+}
+
+.side {
+  flex: 1 1 220px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* ------------------------------------------------------------
+   Typography
+   ------------------------------------------------------------ */
+
+h1 {
+  font-size: 34px;
+  letter-spacing: -1px;
+  margin: 0 0 4px;
+}
+
+.sub {
+  color: var(--mute);
+  margin: 0 0 20px;
+}
+
+.lbl {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  color: var(--mute);
+  margin-top: 6px;
+}
+
+.caption {
+  font-size: 12px;
+  color: var(--mute);
+  line-height: 1.4;
+}
+
+/* ------------------------------------------------------------
+   Canvas
+   ------------------------------------------------------------ */
+
+canvas.grid {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1;
+  display: block;
+  border: 3px solid var(--ink);
+  background: #fff;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  cursor: crosshair;
+}
+
+.prev {
+  border: 2px solid var(--ink);
+  background: #fff;
+  image-rendering: pixelated;
+  width: 64px;
+  height: 64px;
+  align-self: flex-start;
+}
+
+/* ------------------------------------------------------------
+   Buttons
+   ------------------------------------------------------------ */
+
+button {
+  font: inherit;
+  min-height: 44px;
+  padding: 9px 12px;
+  background: var(--paper);
+  color: var(--ink);
+  border: 2px solid var(--ink);
+  cursor: pointer;
+  text-align: left;
+}
+
+button:active:not(:disabled) {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+button.on {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+button.go {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Quiet secondary link-style button used under the primary actions. */
+.link {
+  background: none;
+  border: none;
+  padding: 4px 0;
+  min-height: 0;
+  color: var(--mute);
+  font-size: 12px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-align: left;
+}
+
+.link:active {
+  background: none;
+  color: var(--accent);
+}
+
+.tools {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+/* ------------------------------------------------------------
+   Brush-size picker
+   ------------------------------------------------------------ */
+
+.brush-section {
+  margin-top: 14px;
+}
+
+.brush-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.brush {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 6px 10px;
+  background: var(--paper);
+  color: var(--ink);
+  border: 2px solid var(--ink);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.brush:active:not(:disabled) {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+.brush.on {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+.brush-swatch {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid currentColor;
+  flex: 0 0 auto;
+}
+
+.brush-dot {
+  display: block;
+  background: currentColor;
+}
+
+/* ------------------------------------------------------------
+   Panels: hint, notice, help
+   ------------------------------------------------------------ */
+
+.hint {
+  border: 2px solid var(--ink);
+  padding: 10px;
+  font-size: 13px;
+  line-height: 1.4;
+  background: #fff;
+}
+
+/* Blank-canvas / status banner. Sits directly above the Pendant buttons.
+   Flat, 2px ink border and 13px/1.4 metrics match .hint exactly - only
+   the accent fill and white bold text set it apart as an alert. */
+.notice {
+  background: var(--accent);
+  color: #fff;
+  border: 2px solid var(--ink);
+  padding: 10px;
+  font-size: 13px;
+  font-weight: bold;
+  line-height: 1.4;
+}
+
+/* Instructions / help panel. Same chrome as .hint but with an accent
+   left edge so it reads as a "you need to do something" callout. */
+.help {
+  border: 2px solid var(--ink);
+  border-left: 6px solid var(--accent);
+  padding: 12px;
+  font-size: 13px;
+  line-height: 1.45;
+  background: #fff;
+}
+
+.help h3 {
+  margin: 0 0 6px;
+  font-size: 14px;
+}
+
+.help p {
+  margin: 6px 0;
+}
+
+.help ol {
+  margin: 6px 0 6px 18px;
+  padding: 0;
+}
+
+.help ol li {
+  margin: 6px 0;
+}
+
+.help .substep {
+  display: block;
+  color: var(--mute);
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.help code {
+  background: rgba(20, 20, 20, 0.08);
+  padding: 1px 4px;
+  font-size: 12px;
+}
+
+/* ------------------------------------------------------------
+   Steps list
+
+   NOT a flex container - the mixed text and inline <b> tags inside each
+   step need to flow as normal inline content so they wrap cleanly on
+   narrow screens. The accent bullet is hung in the left padding with
+   absolute positioning instead.
+   ------------------------------------------------------------ */
+
+.steps {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+}
+
+.steps li {
+  position: relative;
+  padding: 7px 0 7px 22px;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.steps li:not(:last-child) {
+  border-bottom: 1px dashed #ccc;
+}
+
+.steps li::before {
+  content: "•";
+  position: absolute;
+  left: 0;
+  top: 7px;
+  color: var(--accent);
+  font-size: 20px;
+  font-weight: bold;
+  line-height: 1.2;
+}
+
+/* ------------------------------------------------------------
+   Conflict resolution: "which avatar wins?"
+
+   The two previews are the buttons. A padded, transparent-bordered frame
+   wraps each so the tap area extends past the canvas itself, and hover /
+   focus lights that frame in the accent so it's obvious which one a tap
+   will pick. The action label always shows (so touch users see it too)
+   and just gains the accent on hover.
+   ------------------------------------------------------------ */
+
+.choice-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.choice {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+  padding: 8px;
+  background: none;
+  border: 2px solid transparent;
+  cursor: pointer;
+  text-align: left;
+  min-height: 0;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+.choice:hover,
+.choice:focus-visible {
+  border-color: var(--accent);
+  background: rgba(217, 79, 43, 0.08);
+  outline: none;
+}
+
+.choice:active {
+  background: rgba(217, 79, 43, 0.18);
+}
+
+/* The inner preview's own border also goes accent on hover, so the
+   highlight reads as one continuous frame rather than a floating box. */
+.choice:hover .prev,
+.choice:focus-visible .prev {
+  border-color: var(--accent);
+}
+
+.choice-action {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  color: var(--mute);
+  transition: color 0.12s ease;
+}
+
+.choice:hover .choice-action,
+.choice:focus-visible .choice-action {
+  color: var(--accent);
+  font-weight: bold;
+}
+
+/* ------------------------------------------------------------
+   Form inputs and log
+   ------------------------------------------------------------ */
+
+input {
+  font: inherit;
+  font-size: 16px;
+  min-height: 44px;
+  width: 100%;
+  padding: 8px;
+  border: 2px solid var(--ink);
+  background: #fff;
+  color: var(--ink);
+}
+
+pre {
+  background: var(--ink);
+  color: #b8e08a;
+  padding: 10px;
+  height: 130px;
+  overflow: auto;
+  font-size: 12px;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ------------------------------------------------------------
+   Small screens
+   ------------------------------------------------------------ */
+
+@media (max-width: 560px) {
+  h1 {
+    font-size: 26px;
+  }
+
+  .wrap {
+    padding-top: 16px;
+  }
+}
