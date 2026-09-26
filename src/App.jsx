@@ -1,5 +1,4 @@
 import React, { useRef, useState, useEffect } from "react";
-import "./App.css";
 
 const N = 32;
 const CELL = 16;
@@ -72,21 +71,13 @@ function fromHex(h) {
 const btOk = typeof navigator !== "undefined" && "bluetooth" in navigator;
 const isBlank = (p) => !p || p.every((v) => !v);
 
-// True when this page is served over HTTPS. On iOS Safari (and now some
-// other browsers), an HTTPS page cannot fetch() a plain http:// URL like
-// http://192.168.4.1 - the browser blocks it as mixed content before the
-// request ever leaves. That means our background poll can never light up
-// the Connect button there, so we must not gate it on the poll result.
-const isHttps =
-  typeof window !== "undefined" && window.location.protocol === "https:";
-
 // Rough classifier for "this wasn't a normal HTTP error, the browser
 // wouldn't even let the request out". Used only to auto-open the help panel
 // when a WiFi attempt fails at the browser level - the exact cause still
 // gets logged verbatim either way.
 const looksLikeNetworkBlock = (err) => {
   const m = (err && err.message) || String(err || "");
-  return /failed to fetch|networkerror|load failed|blocked|mixed content|local network|err_|operation couldn't/i.test(m);
+  return /failed to fetch|networkerror|load failed|blocked|mixed content|local network|err_/i.test(m);
 };
 
 // Tiny read-only preview of a 32x32 pixel array
@@ -104,6 +95,117 @@ function MiniAvatar({ pixels }) {
   }, [pixels]);
   return <canvas ref={ref} className="prev" width={N} height={N} />;
 }
+
+const css = `
+  :root { --paper:#e8e4d8; --ink:#141414; --accent:#d94f2b; --mute:#7a766b; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body { margin:0; background:var(--paper); color:var(--ink);
+    font-family:'Courier New',ui-monospace,monospace; }
+  .wrap { max-width:860px; margin:0 auto; padding:28px 20px;
+    padding-left:max(20px, env(safe-area-inset-left));
+    padding-right:max(20px, env(safe-area-inset-right));
+    padding-bottom:max(28px, env(safe-area-inset-bottom)); }
+  h1 { font-size:34px; letter-spacing:-1px; margin:0 0 4px; }
+  .sub { color:var(--mute); margin:0 0 20px; }
+  .row { display:flex; gap:24px; flex-wrap:wrap; align-items:flex-start; }
+  .stage { flex:1 1 320px; max-width:512px; width:100%; }
+  canvas.grid { width:100%; height:auto; aspect-ratio:1; display:block; border:3px solid var(--ink);
+    background:#fff; touch-action:none; user-select:none; -webkit-user-select:none;
+    -webkit-touch-callout:none; cursor:crosshair; }
+  .side { flex:1 1 220px; display:flex; flex-direction:column; gap:10px; min-width:0; }
+  .tools { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  button { font:inherit; min-height:44px; padding:9px 12px; background:var(--paper); color:var(--ink);
+    border:2px solid var(--ink); cursor:pointer; text-align:left; }
+  button:active:not(:disabled) { background:var(--ink); color:var(--paper); }
+  button.on { background:var(--ink); color:var(--paper); }
+  button.go { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button:disabled { opacity:.4; cursor:not-allowed; }
+  .lbl { font-size:12px; text-transform:uppercase; letter-spacing:2px; color:var(--mute); margin-top:6px; }
+  .prev { border:2px solid var(--ink); background:#fff; image-rendering:pixelated;
+    width:64px; height:64px; align-self:flex-start; }
+  .hint { border:2px solid var(--ink); padding:10px; font-size:13px; line-height:1.4;
+    background:#fff; }
+
+  /* Blank-canvas / status banner. Sits directly above the Pendant buttons.
+     Flat, 2px ink border and 13px/1.4 metrics match .hint exactly - only
+     the accent fill and white bold text set it apart as an alert. */
+  .notice { background:var(--accent); color:#fff; border:2px solid var(--ink);
+    padding:10px; font-size:13px; font-weight:bold; line-height:1.4; }
+
+  /* Instructions / help panel. Same chrome as .hint but with an accent
+     left edge so it reads as a "you need to do something" callout. */
+  .help { border:2px solid var(--ink); border-left:6px solid var(--accent);
+    padding:12px; font-size:13px; line-height:1.45; background:#fff; }
+  .help h3 { margin:0 0 6px; font-size:14px; }
+  .help p { margin:6px 0; }
+  .help ol { margin:6px 0 6px 18px; padding:0; }
+  .help ol li { margin:6px 0; }
+  .help .substep { display:block; color:var(--mute); font-size:12px; margin-top:2px; }
+  .help code { background:rgba(20,20,20,.08); padding:1px 4px; font-size:12px; }
+
+  /* Quiet secondary link-style button used under the primary actions. */
+  .link { background:none; border:none; padding:4px 0; min-height:0;
+    color:var(--mute); font-size:12px; text-decoration:underline;
+    text-underline-offset:2px; text-align:left; }
+  .link:active { background:none; color:var(--accent); }
+
+  /* Small muted caption under a disabled control. */
+  .caption { font-size:12px; color:var(--mute); line-height:1.4; }
+
+  /* ---- Conflict resolution: "which avatar wins?" ----
+     The two previews are the buttons. A padded, transparent-bordered frame
+     wraps each so the tap area extends past the canvas itself, and hover /
+     focus lights that frame in the accent so it's obvious which one a tap
+     will pick. The action label always shows (so touch users see it too)
+     and just gains the accent on hover. */
+  .choice-row { display:flex; gap:12px; flex-wrap:wrap; }
+  .choice { display:flex; flex-direction:column; gap:6px; align-items:flex-start;
+    padding:8px; background:none; border:2px solid transparent;
+    cursor:pointer; text-align:left; min-height:0;
+    transition: border-color .12s ease, background .12s ease; }
+  .choice:hover, .choice:focus-visible {
+    border-color: var(--accent); background: rgba(217,79,43,.08); outline:none; }
+  .choice:active { background: rgba(217,79,43,.18); }
+  /* The inner preview's own border also goes accent on hover, so the
+     highlight reads as one continuous frame rather than a floating box. */
+  .choice:hover .prev, .choice:focus-visible .prev { border-color: var(--accent); }
+  .choice-action { font-size:11px; text-transform:uppercase;
+    letter-spacing:1.5px; color:var(--mute); transition: color .12s ease; }
+  .choice:hover .choice-action, .choice:focus-visible .choice-action {
+    color: var(--accent); font-weight:bold; }
+
+  /* Brush-size picker under the canvas. */
+  .brush-section { margin-top:14px; }
+  .brush-row { display:flex; gap:8px; flex-wrap:wrap; }
+  .brush { display:flex; align-items:center; gap:8px; min-height:44px;
+    padding:6px 10px; background:var(--paper); color:var(--ink);
+    border:2px solid var(--ink); cursor:pointer; font:inherit;
+    text-align:left; }
+  .brush:active:not(:disabled) { background:var(--ink); color:var(--paper); }
+  .brush.on { background:var(--ink); color:var(--paper); }
+  .brush-swatch { display:inline-flex; align-items:center; justify-content:center;
+    width:22px; height:22px; border:1px solid currentColor; flex:0 0 auto; }
+  .brush-dot { display:block; background:currentColor; }
+
+  /* Steps list. NOT a flex container - the mixed text and inline <b> tags
+     inside each step need to flow as normal inline content so they wrap
+     cleanly on narrow screens. The accent bullet is hung in the left
+     padding with absolute positioning instead. */
+  .steps { list-style:none; margin:4px 0 0; padding:0; }
+  .steps li { position:relative; padding:7px 0 7px 22px;
+    font-size:14px; line-height:1.45; }
+  .steps li:not(:last-child) { border-bottom:1px dashed #ccc; }
+  .steps li::before { content:"•"; position:absolute; left:0; top:7px;
+    color:var(--accent); font-size:20px; font-weight:bold; line-height:1.2; }
+  input { font:inherit; font-size:16px; min-height:44px; width:100%; padding:8px;
+    border:2px solid var(--ink); background:#fff; color:var(--ink); }
+  pre { background:var(--ink); color:#b8e08a; padding:10px; height:130px; overflow:auto;
+    font-size:12px; margin:0; white-space:pre-wrap; word-break:break-word; }
+  @media (max-width:560px) {
+    h1 { font-size:26px; }
+    .wrap { padding-top:16px; }
+  }
+`;
 
 export default function App() {
   const canvasRef = useRef(null);
@@ -169,9 +271,7 @@ export default function App() {
   }, [px]);
 
   // Background poll for the pendant's hotspot. Purely to know whether the
-  // Connect button should be live on the WiFi path. On an HTTPS page this
-  // will always fail on iOS, so it effectively does nothing there - the
-  // button is enabled unconditionally in that case (see canConnect below).
+  // Connect button should be live on the WiFi path.
   useEffect(() => {
     if (transport) return;
     let cancelled = false;
@@ -484,12 +584,7 @@ export default function App() {
     addLog("Disconnected.");
   };
 
-  // The Connect button is gated on hotspot detection only when that
-  // detection can actually succeed. On an HTTPS page it can't, because
-  // iOS Safari (and others) block HTTPS->HTTP fetches to 192.168.4.1 as
-  // mixed content. In that case we leave the button enabled so tapping
-  // it produces a real, useful error and opens the help panel.
-  const canConnect = useWifi ? (wifiDetected || isHttps) : true;
+  const canConnect = useWifi ? wifiDetected : true;
 
   const connectPendant = () => {
     if (!canConnect) {
@@ -584,282 +679,248 @@ export default function App() {
   };
 
   return (
-    <div className="wrap">
-      <h1>CoolTown avatar</h1>
-      <p className="sub">Draw a 32×32 avatar, then send it to the pendant.</p>
+    <>
+      <style>{css}</style>
+      <div className="wrap">
+        <h1>CoolTown avatar</h1>
+        <p className="sub">Draw a 32×32 avatar, then send it to the pendant.</p>
 
-      <div className="hint" style={{ marginBottom: 16 }}>
-        <b>How to send</b>
-        <ol className="steps">
-          <li>
-            On the pendant's side, scroll <b>down</b> with the wheel to
-            reach the <b>Avatars</b> screen.
-          </li>
-          <li>
-            <b>Press the wheel in</b> to start pairing.
-          </li>
-          {useWifi && (
+        <div className="hint" style={{ marginBottom: 16 }}>
+          <b>How to send</b>
+          <ol className="steps">
             <li>
-              While it's pairing, scroll <b>up</b> to switch it to WiFi.
+              On the pendant's side, scroll <b>down</b> with the wheel to
+              reach the <b>Avatars</b> screen.
             </li>
-          )}
-          {useWifi && (
             <li>
-              On this device, join the WiFi network called{" "}
-              <b>CoolTown-XXXX</b>.
+              <b>Press the wheel in</b> to start pairing.
             </li>
-          )}
-          <li>
-            Draw your avatar on the canvas below.
-          </li>
-          <li>
-            Tap <b>Connect &amp; send</b> below.
-          </li>
-        </ol>
-      </div>
-
-      <div className="row">
-        <div className="stage">
-          <canvas
-            ref={canvasRef}
-            className="grid"
-            width={N * CELL}
-            height={N * CELL}
-            onContextMenu={(e) => e.preventDefault()}
-            onPointerDown={startStroke}
-            onPointerMove={(e) => {
-              updateHover(e);
-              if (drawing.current) paint(e);
-            }}
-            onPointerUp={stop}
-            onPointerCancel={stop}
-            onPointerLeave={() => setHover(null)}
-          />
-          <div className="brush-section">
-            <div className="lbl">Brush size</div>
-            <div className="brush-row">
-              {BRUSH_SIZES.map((s) => (
-                <button
-                  key={s}
-                  className={`brush ${brushSize === s ? "on" : ""}`}
-                  onClick={() => setBrushSize(s)}
-                  aria-pressed={brushSize === s}
-                  title={`${s}×${s} pixels`}
-                >
-                  <span className="brush-swatch" aria-hidden="true">
-                    <span
-                      className="brush-dot"
-                      style={{ width: s * 2, height: s * 2 }}
-                    />
-                  </span>
-                  {s}×{s}
-                </button>
-              ))}
-            </div>
-          </div>
+            {useWifi && (
+              <li>
+                While it's pairing, scroll <b>up</b> to switch it to WiFi.
+              </li>
+            )}
+            {useWifi && (
+              <li>
+                On this device, join the WiFi network called{" "}
+                <b>CoolTown-XXXX</b>.
+              </li>
+            )}
+            <li>
+              Draw your avatar on the canvas below.
+            </li>
+            <li>
+              Tap <b>Connect &amp; send</b> below.
+            </li>
+          </ol>
         </div>
-        <div className="side">
-          <div className="lbl">Tools</div>
-          <div className="tools">
-            <button className={tool ? "on" : ""} onClick={() => setTool(1)}>Draw</button>
-            <button className={!tool ? "on" : ""} onClick={() => setTool(0)}>Erase</button>
-            <button className={mirror ? "on" : ""} onClick={() => setMirror(!mirror)}>
-              Mirror: {mirror ? "on" : "off"}
-            </button>
-            <button onClick={undo} disabled={!history.length}>
-              Undo ({history.length})
-            </button>
-            <button onClick={doInvert}>Invert</button>
-            <button onClick={doClear}>Clear</button>
-          </div>
-          <div className="lbl">Preview</div>
-          <canvas ref={prevRef} className="prev" width={N} height={N} />
 
-          <div className="lbl">Pendant</div>
-
-          {notice && (
-            <div className="notice" role="status" aria-live="polite">
-              {notice}
+        <div className="row">
+          <div className="stage">
+            <canvas
+              ref={canvasRef}
+              className="grid"
+              width={N * CELL}
+              height={N * CELL}
+              onContextMenu={(e) => e.preventDefault()}
+              onPointerDown={startStroke}
+              onPointerMove={(e) => {
+                updateHover(e);
+                if (drawing.current) paint(e);
+              }}
+              onPointerUp={stop}
+              onPointerCancel={stop}
+              onPointerLeave={() => setHover(null)}
+            />
+            <div className="brush-section">
+              <div className="lbl">Brush size</div>
+              <div className="brush-row">
+                {BRUSH_SIZES.map((s) => (
+                  <button
+                    key={s}
+                    className={`brush ${brushSize === s ? "on" : ""}`}
+                    onClick={() => setBrushSize(s)}
+                    aria-pressed={brushSize === s}
+                    title={`${s}×${s} pixels`}
+                  >
+                    <span className="brush-swatch" aria-hidden="true">
+                      <span
+                        className="brush-dot"
+                        style={{ width: s * 2, height: s * 2 }}
+                      />
+                    </span>
+                    {s}×{s}
+                  </button>
+                ))}
+              </div>
             </div>
-          )}
-
-          {!connected && (
-            <>
-              <button
-                className="go"
-                onClick={connectPendant}
-                disabled={!canConnect}
-                style={{ opacity: canConnect ? 1 : 0.3 }}
-                title={canConnect ? "" : "Waiting for the pendant's WiFi network"}
-              >
-                Connect &amp; send
+          </div>
+          <div className="side">
+            <div className="lbl">Tools</div>
+            <div className="tools">
+              <button className={tool ? "on" : ""} onClick={() => setTool(1)}>Draw</button>
+              <button className={!tool ? "on" : ""} onClick={() => setTool(0)}>Erase</button>
+              <button className={mirror ? "on" : ""} onClick={() => setMirror(!mirror)}>
+                Mirror: {mirror ? "on" : "off"}
               </button>
-
-              {/* Explain what we're waiting for - or, on HTTPS, explain
-                  the situation we can't detect our way out of. */}
-              {useWifi && !wifiDetected && !isHttps && (
-                <div className="caption">
-                  Waiting for the pendant's WiFi network. Join{" "}
-                  <b>CoolTown-XXXX</b> in your device's WiFi settings.
-                </div>
-              )}
-              {useWifi && isHttps && (
-                <div className="caption">
-                  On iPhone, this page has to be opened over{" "}
-                  <b>http://</b> (not <b>https://</b>) to reach the
-                  pendant. If tapping the button doesn't work, tap{" "}
-                  <b>Trouble connecting?</b> below.
-                </div>
-              )}
-            </>
-          )}
-
-          {connected && conflict && (
-            <div className="hint" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-              <b>Pendant already has an avatar, and you've drawn one too.</b>
-              <div style={{ fontSize: 12, color: "var(--mute)" }}>
-                Tap the one you want to keep.
-              </div>
-              <div className="choice-row">
-                <button
-                  className="choice"
-                  onClick={keepMine}
-                  aria-label="Keep my avatar and send it to the pendant"
-                >
-                  <div className="lbl" style={{ marginTop: 0 }}>Yours</div>
-                  <MiniAvatar pixels={px} />
-                  <div className="choice-action">Keep this</div>
-                </button>
-                <button
-                  className="choice"
-                  onClick={usePendantAvatar}
-                  aria-label="Load the pendant's avatar into the editor"
-                >
-                  <div className="lbl" style={{ marginTop: 0 }}>Pendant's</div>
-                  <MiniAvatar pixels={conflict.avatar} />
-                  <div className="choice-action">Use this</div>
-                </button>
-              </div>
+              <button onClick={undo} disabled={!history.length}>
+                Undo ({history.length})
+              </button>
+              <button onClick={doInvert}>Invert</button>
+              <button onClick={doClear}>Clear</button>
             </div>
-          )}
+            <div className="lbl">Preview</div>
+            <canvas ref={prevRef} className="prev" width={N} height={N} />
 
-          {connected && !conflict && (
-            <>
-              <button className="go" onClick={send}>Send again</button>
-              <button onClick={disconnect}>Disconnect</button>
-              <div style={{ fontSize: 12, color: "var(--mute)" }}>
-                Connected: {deviceName} ({transport === "ble" ? "Bluetooth" : "WiFi"})
+            <div className="lbl">Pendant</div>
+
+            {notice && (
+              <div className="notice" role="status" aria-live="polite">
+                {notice}
               </div>
-            </>
-          )}
+            )}
 
-          {useWifi && showNetworkHelp && (
-            <div className="help" role="region" aria-label="Network access help">
-              <h3>Let this page talk to your pendant</h3>
-
-              {/* On HTTPS, the most likely cause is mixed content - lead
-                  with that so the user isn't sent into browser settings
-                  for a permission that isn't the problem. */}
-              {isHttps ? (
-                <>
-                  <p>
-                    Your browser is blocking this page from reaching the
-                    pendant. Because this page uses <b>https://</b> and the
-                    pendant only speaks <b>http://</b>, most browsers
-                    (especially iPhone Safari) refuse to make the request.
-                  </p>
-                  <p>
-                    The fix is to open this same page over{" "}
-                    <b>http://</b> instead of <b>https://</b>. If that's not
-                    possible, try a different device or a desktop Chrome
-                    browser, which is more permissive about this.
-                  </p>
-                </>
-              ) : (
-                <>
-                  <p>
-                    Your browser is stopping this page from sending your
-                    avatar to the pendant. This usually happens if{" "}
-                    <b>Block</b> was tapped the first time your browser
-                    asked for permission — it won't ask again on its own,
-                    so it has to be switched back on by hand.
-                  </p>
-                  <ol>
-                    <li>
-                      <b>On iPhone (Safari):</b>
-                      <span className="substep">
-                        Settings → Safari → scroll down to{" "}
-                        <b>Local Network</b> → make sure it's on for this
-                        site. Then reload the page.
-                      </span>
-                    </li>
-                    <li>
-                      <b>On Android (Chrome):</b>
-                      <span className="substep">
-                        Tap the <b>lock</b> (or <b>tune</b>) icon in the
-                        address bar → <b>Permissions</b> →{" "}
-                        <b>Local network</b> → <b>Allow</b>. Then reload.
-                      </span>
-                    </li>
-                    <li>
-                      <b>On a computer (Chrome):</b>
-                      <span className="substep">
-                        Settings → Privacy and security → Site settings →
-                        Additional permissions → <b>Local network access</b>{" "}
-                        → set this site to <b>Allow</b>. Then reload.
-                      </span>
-                    </li>
-                  </ol>
-                </>
-              )}
-
-              <div className="tools" style={{ marginTop: 10 }}>
-                <button onClick={() => window.location.reload()}>
-                  Reload page
+            {!connected && (
+              <>
+                <button
+                  className="go"
+                  onClick={connectPendant}
+                  disabled={!canConnect}
+                  style={{ opacity: canConnect ? 1 : 0.3 }}
+                  title={canConnect ? "" : "Waiting for the pendant's WiFi network"}
+                >
+                  Connect &amp; send
                 </button>
-                <button onClick={() => setShowNetworkHelp(false)}>
-                  Dismiss
-                </button>
+                {useWifi && !wifiDetected && (
+                  <div className="caption">
+                    Waiting for the pendant's WiFi network. Join{" "}
+                    <b>CoolTown-XXXX</b> in your device's WiFi settings.
+                  </div>
+                )}
+              </>
+            )}
+
+            {connected && conflict && (
+              <div className="hint" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                <b>Pendant already has an avatar, and you've drawn one too.</b>
+                <div style={{ fontSize: 12, color: "var(--mute)" }}>
+                  Tap the one you want to keep.
+                </div>
+                <div className="choice-row">
+                  <button
+                    className="choice"
+                    onClick={keepMine}
+                    aria-label="Keep my avatar and send it to the pendant"
+                  >
+                    <div className="lbl" style={{ marginTop: 0 }}>Yours</div>
+                    <MiniAvatar pixels={px} />
+                    <div className="choice-action">Keep this</div>
+                  </button>
+                  <button
+                    className="choice"
+                    onClick={usePendantAvatar}
+                    aria-label="Load the pendant's avatar into the editor"
+                  >
+                    <div className="lbl" style={{ marginTop: 0 }}>Pendant's</div>
+                    <MiniAvatar pixels={conflict.avatar} />
+                    <div className="choice-action">Use this</div>
+                  </button>
+                </div>
               </div>
+            )}
+
+            {connected && !conflict && (
+              <>
+                <button className="go" onClick={send}>Send again</button>
+                <button onClick={disconnect}>Disconnect</button>
+                <div style={{ fontSize: 12, color: "var(--mute)" }}>
+                  Connected: {deviceName} ({transport === "ble" ? "Bluetooth" : "WiFi"})
+                </div>
+              </>
+            )}
+
+            {useWifi && showNetworkHelp && (
+              <div className="help" role="region" aria-label="Network access help">
+                <h3>Let this page talk to your pendant</h3>
+                <p>
+                  Your browser is stopping this page from sending your avatar
+                  to the pendant. This usually happens if <b>Block</b> was
+                  tapped the first time your browser asked for permission —
+                  it won't ask again on its own, so it has to be switched
+                  back on by hand.
+                </p>
+                <ol>
+                  <li>
+                    <b>On a computer (Chrome):</b>
+                    <span className="substep">
+                      Settings → Privacy and security → Site settings →
+                      Additional permissions → <b>Local network access</b>{" "}
+                      → set this site to <b>Allow</b>. Then reload the page.
+                    </span>
+                  </li>
+                  <li>
+                    <b>On Android (Chrome):</b>
+                    <span className="substep">
+                      Tap the <b>lock</b> (or <b>tune</b>) icon in the address
+                      bar → <b>Permissions</b> → <b>Local network</b> →{" "}
+                      <b>Allow</b>. Then reload the page.
+                    </span>
+                  </li>
+                </ol>
+                <p>
+                  On any other browser: look in the settings for this website
+                  for something called <b>Local network access</b>{" "}
+                  (sometimes just <b>Local network</b>), and set it to{" "}
+                  <b>Allow</b>.
+                </p>
+                <div className="tools" style={{ marginTop: 10 }}>
+                  <button onClick={() => window.location.reload()}>
+                    Reload page
+                  </button>
+                  <button onClick={() => setShowNetworkHelp(false)}>
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {useWifi && !showNetworkHelp && !connected && (
+              <button className="link" onClick={() => setShowNetworkHelp(true)}>
+                Trouble connecting?
+              </button>
+            )}
+
+            {btOk && !useWifi && !connected && (
+              <button className="link" onClick={enterWifiMode}>
+                Having problems? Try connecting via WiFi
+              </button>
+            )}
+            {btOk && wifiMode && !connected && (
+              <button className="link" onClick={exitWifiMode}>
+                Back to Bluetooth
+              </button>
+            )}
+
+            <div className="lbl">Move between devices</div>
+            <div className="tools">
+              <button onClick={() => copy(link, "link")}>Copy link</button>
+              <button onClick={() => copy(code, "code")}>Copy code</button>
             </div>
-          )}
-
-          {useWifi && !showNetworkHelp && !connected && (
-            <button className="link" onClick={() => setShowNetworkHelp(true)}>
-              Trouble connecting?
-            </button>
-          )}
-
-          {btOk && !useWifi && !connected && (
-            <button className="link" onClick={enterWifiMode}>
-              Having problems? Try connecting via WiFi
-            </button>
-          )}
-          {btOk && wifiMode && !connected && (
-            <button className="link" onClick={exitWifiMode}>
-              Back to Bluetooth
-            </button>
-          )}
-
-          <div className="lbl">Move between devices</div>
-          <div className="tools">
-            <button onClick={() => copy(link, "link")}>Copy link</button>
-            <button onClick={() => copy(code, "code")}>Copy code</button>
+            <input
+              value={codeIn}
+              onChange={(e) => setCodeIn(e.target.value)}
+              placeholder="Paste a code or link"
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
+            />
+            <button onClick={loadCode} disabled={!codeIn}>Load</button>
           </div>
-          <input
-            value={codeIn}
-            onChange={(e) => setCodeIn(e.target.value)}
-            placeholder="Paste a code or link"
-            autoCapitalize="off"
-            autoCorrect="off"
-            spellCheck={false}
-          />
-          <button onClick={loadCode} disabled={!codeIn}>Load</button>
         </div>
-      </div>
 
-      <div className="lbl" style={{ margin: "20px 0 6px" }}>Log</div>
-      <pre>{log.join("\n")}</pre>
-    </div>
+        <div className="lbl" style={{ margin: "20px 0 6px" }}>Log</div>
+        <pre>{log.join("\n")}</pre>
+      </div>
+    </>
   );
 }
