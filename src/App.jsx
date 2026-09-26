@@ -72,9 +72,9 @@ const btOk = typeof navigator !== "undefined" && "bluetooth" in navigator;
 const isBlank = (p) => !p || p.every((v) => !v);
 
 // Rough classifier for "this wasn't a normal HTTP error, the browser
-// wouldn't even let the request out". Only used on the WiFi path to decide
-// whether to surface the network-help panel - the exact cause still gets
-// logged verbatim either way.
+// wouldn't even let the request out". Used only to auto-open the help panel
+// when a WiFi attempt fails at the browser level - the exact cause still
+// gets logged verbatim either way.
 const looksLikeNetworkBlock = (err) => {
   const m = (err && err.message) || String(err || "");
   return /failed to fetch|networkerror|load failed|blocked|mixed content|local network|err_/i.test(m);
@@ -235,8 +235,10 @@ export default function App() {
   const [showWifiHelp, setShowWifiHelp] = useState(false);
   const useWifi = !btOk || wifiMode;
 
-  // ---- Local-network access (WiFi path only) ----
-  const [lnaState, setLnaState] = useState("checking"); // checking | granted | prompt | denied | unsupported
+  // ---- Network help panel (WiFi path only) ----
+  // Opened by the quiet "Trouble connecting?" link, or automatically when a
+  // WiFi attempt fails at the browser level. No permission API is queried
+  // any more - the panel is pure static instructions.
   const [showNetworkHelp, setShowNetworkHelp] = useState(false);
 
   // ---- Pendant hotspot detection (WiFi path only) ----
@@ -267,43 +269,8 @@ export default function App() {
     if (!isBlank(px) && noticeTimer.current) clearNotice();
   }, [px]);
 
-  // Query the local-network-access permission on mount, and again whenever
-  // the tab regains focus or the user flips into WiFi mode.
-  useEffect(() => {
-    if (!useWifi) return;
-    let cancelled = false;
-    let statusRef = null;
-
-    const check = async () => {
-      if (!navigator.permissions?.query) {
-        if (!cancelled) setLnaState("unsupported");
-        return;
-      }
-      try {
-        const status = await navigator.permissions.query({
-          name: "local-network-access",
-        });
-        if (cancelled) return;
-        statusRef = status;
-        setLnaState(status.state);
-        status.onchange = () => {
-          if (!cancelled) setLnaState(status.state);
-        };
-      } catch {
-        if (!cancelled) setLnaState("unsupported");
-      }
-    };
-
-    check();
-    window.addEventListener("focus", check);
-    return () => {
-      cancelled = true;
-      window.removeEventListener("focus", check);
-      if (statusRef) statusRef.onchange = null;
-    };
-  }, [useWifi]);
-
-  // Background poll for the pendant's hotspot.
+  // Background poll for the pendant's hotspot. Purely to know whether the
+  // Connect button should be live on the WiFi path.
   useEffect(() => {
     if (transport) return;
     let cancelled = false;
@@ -319,21 +286,6 @@ export default function App() {
     const id = setInterval(tick, 2500);
     return () => { cancelled = true; clearInterval(id); };
   }, [transport]);
-
-  const requestLocalNetwork = async () => {
-    if (lnaState === "denied") {
-      setShowNetworkHelp(true);
-      addLog("Local network access is blocked in site settings - open the panel for steps.");
-      return;
-    }
-    addLog("Asking the browser for local network access...");
-    try {
-      await fetchWithTimeout(wifiUrl("/avatar"), {}, 8000);
-      addLog("Request sent. If you saw a prompt, choose Allow.");
-    } catch {
-      addLog("Request didn't complete - if a Block option was shown, re-allow it in site settings.");
-    }
-  };
 
   const drawing = useRef(false);
   const last = useRef(null);
@@ -585,15 +537,6 @@ export default function App() {
     return true;
   };
 
-  const refreshLnaState = async () => {
-    if (!useWifi) return;
-    if (!navigator.permissions?.query) return;
-    try {
-      const s = await navigator.permissions.query({ name: "local-network-access" });
-      setLnaState(s.state);
-    } catch {}
-  };
-
   const wifiGetAvatar = async () => {
     const r = await fetchWithTimeout(wifiUrl("/avatar"), {}, 1500);
     if (!r.ok) throw new Error("HTTP " + r.status);
@@ -628,10 +571,7 @@ export default function App() {
       }
     } catch (err) {
       addLog("WiFi connect failed: " + err.message + " - make sure you've joined the pendant's network.");
-      if (looksLikeNetworkBlock(err)) {
-        setShowNetworkHelp(true);
-        refreshLnaState();
-      }
+      if (looksLikeNetworkBlock(err)) setShowNetworkHelp(true);
     }
   };
 
@@ -673,10 +613,7 @@ export default function App() {
     } catch (err) {
       addLog("Send failed: " + err.message);
       if (transport === "wifi") {
-        if (looksLikeNetworkBlock(err)) {
-          setShowNetworkHelp(true);
-          refreshLnaState();
-        }
+        if (looksLikeNetworkBlock(err)) setShowNetworkHelp(true);
         setConnected(false);
         setTransport(null);
         setDeviceName("");
@@ -703,10 +640,7 @@ export default function App() {
       }
     } catch (err) {
       addLog("Send failed: " + err.message);
-      if (looksLikeNetworkBlock(err)) {
-        setShowNetworkHelp(true);
-        refreshLnaState();
-      }
+      if (looksLikeNetworkBlock(err)) setShowNetworkHelp(true);
     }
   };
 
@@ -851,9 +785,6 @@ export default function App() {
                 <div style={{ fontSize: 12, color: "var(--mute)" }}>
                   Tap the one you want to keep.
                 </div>
-                {/* The two previews are themselves the buttons. Hover (or
-                    keyboard focus) lights up an accent frame around whichever
-                    one you're about to pick. */}
                 <div className="choice-row">
                   <button
                     className="choice"
@@ -887,45 +818,43 @@ export default function App() {
               </>
             )}
 
-            {useWifi && (lnaState === "prompt" || lnaState === "denied") && !showNetworkHelp && !connected && (
-              <button className="go" onClick={requestLocalNetwork}>
-                {lnaState === "denied"
-                  ? "Open permission settings"
-                  : "Allow local network access"}
-              </button>
-            )}
-            {useWifi && lnaState === "granted" && !showNetworkHelp && !connected && (
-              <div className="notice" role="status">
-                Local network access allowed.
-              </div>
-            )}
+            {/* WiFi-path help panel. Opened by the "Trouble connecting?"
+                link below, or automatically when a WiFi attempt fails at
+                the browser level. */}
             {useWifi && showNetworkHelp && (
               <div className="help" role="region" aria-label="Network access help">
-                <h3>Allow this site to reach your pendant</h3>
+                <h3>Let this page talk to your pendant</h3>
                 <p>
-                  Your browser is blocking requests to{" "}
-                  <code>192.168.4.1</code> — the pendant's pairing hotspot.
-                  This usually means the site was set to <b>Block</b> at
-                  some point, and the browser won't ask again on its own.
+                  Your browser is stopping this page from sending your avatar
+                  to the pendant. This usually happens if <b>Block</b> was
+                  tapped the first time your browser asked for permission —
+                  it won't ask again on its own, so it has to be switched
+                  back on by hand.
                 </p>
                 <ol>
                   <li>
-                    <b>Chrome desktop:</b>
+                    <b>On a computer (Chrome):</b>
                     <span className="substep">
                       Settings → Privacy and security → Site settings →
                       Additional permissions → <b>Local network access</b>{" "}
-                      → set this site to <b>Allow</b>. Then reload.
+                      → set this site to <b>Allow</b>. Then reload the page.
                     </span>
                   </li>
                   <li>
-                    <b>Chrome Android:</b>
+                    <b>On Android (Chrome):</b>
                     <span className="substep">
-                      Tap the <b>lock</b> or <b>tune</b> icon in the address
+                      Tap the <b>lock</b> (or <b>tune</b>) icon in the address
                       bar → <b>Permissions</b> → <b>Local network</b> →{" "}
-                      <b>Allow</b>. Then reload.
+                      <b>Allow</b>. Then reload the page.
                     </span>
                   </li>
                 </ol>
+                <p>
+                  On any other browser: look in the settings for this website
+                  for something called <b>Local network access</b>{" "}
+                  (sometimes just <b>Local network</b>), and set it to{" "}
+                  <b>Allow</b>.
+                </p>
                 <div className="tools" style={{ marginTop: 10 }}>
                   <button onClick={() => window.location.reload()}>
                     Reload page
@@ -936,7 +865,10 @@ export default function App() {
                 </div>
               </div>
             )}
-            {useWifi && !showNetworkHelp && (lnaState === "unsupported" || lnaState === "granted") && !connected && (
+
+            {/* Quiet link - the sole entry point to the help panel. Shown
+                on the WiFi path whenever the panel isn't already open. */}
+            {useWifi && !showNetworkHelp && !connected && (
               <button className="link" onClick={() => setShowNetworkHelp(true)}>
                 Trouble connecting?
               </button>
