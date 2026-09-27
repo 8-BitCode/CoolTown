@@ -402,6 +402,12 @@ export default function App() {
   useEffect(() => { brushRef.current = brushSize; }, [brushSize]);
 
   useEffect(() => {
+    // Both canvases only exist in the main editor view. On iOS,
+    // showFallbackPage starts out true and this effect still fires on
+    // mount (its deps are all set from the initial state) - without this
+    // guard it threw on a null ref and crashed the whole app to a blank
+    // white page, with no error boundary to catch it.
+    if (!canvasRef.current || !prevRef.current) return;
     const c = canvasRef.current.getContext("2d");
     c.fillStyle = "#fff";
     c.fillRect(0, 0, N * CELL, N * CELL);
