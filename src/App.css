@@ -167,6 +167,11 @@
   pre { background:var(--ink); color:var(--console); padding:10px; height:130px; overflow:auto;
     font-size:12px; margin:0; white-space:pre-wrap; word-break:break-word;
     border:2px solid var(--ink); }
+  /* Capture-locations map. z-index:0 keeps Leaflet's panes under the page UI. */
+  .sitemap { height:300px; width:100%; border:2px solid var(--ink); position:relative; z-index:0; }
+  .pin span { display:flex; align-items:center; justify-content:center; width:26px; height:26px;
+    background:var(--accent); color:#fff; border:2px solid var(--ink); box-shadow:2px 2px 0 var(--ink);
+    font:700 13px 'IBM Plex Mono',monospace; }
   @media (max-width:560px) {
     h1 { font-size:25px; }
     .wrap { padding-top:20px; }

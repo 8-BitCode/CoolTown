@@ -1,4 +1,6 @@
 import React, { useRef, useState, useEffect } from "react";
+import L from "leaflet";
+import "leaflet/dist/leaflet.css";
 
 const N = 32;
 const CELL = 16;
@@ -129,6 +131,67 @@ function MiniAvatar({ pixels }) {
     });
   }, [pixels]);
   return <canvas ref={ref} className="prev" width={N} height={N} />;
+}
+
+// Capture locations. Keep in sync with SITES in the firmware (.ino).
+const SITES = [
+  { name: "Kilburn Building",   lat: 53.467287, lng: -2.234466 },
+  { name: "Nancy Rothwell",     lat: 53.469273, lng: -2.234336 },
+  { name: "Ford Maddox Spoons", lat: 53.458178, lng: -2.226790 },
+  { name: "Main Library",       lat: 53.464663, lng: -2.235186 },
+];
+const CAPTURE_RADIUS_M = 15;
+
+// Map of the capture spots. Pins are numbered divIcons (no image assets to
+// bundle); the red rings are the real capture radius. The buttons under the
+// map double as an offline legend if tiles can't load (e.g. while the phone
+// is joined to the pendant's WiFi, which has no internet).
+function SiteMap() {
+  const elRef = useRef(null);
+  const mapRef = useRef(null);
+  useEffect(() => {
+    const map = L.map(elRef.current, { scrollWheelZoom: false });
+    mapRef.current = map;
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxZoom: 19,
+      attribution: "&copy; OpenStreetMap contributors",
+    }).addTo(map);
+    SITES.forEach((s, i) => {
+      L.marker([s.lat, s.lng], {
+        title: s.name,
+        icon: L.divIcon({ className: "pin", html: `<span>${i + 1}</span>`, iconSize: [26, 26], iconAnchor: [13, 13] }),
+      }).addTo(map).bindTooltip(s.name);
+      L.circle([s.lat, s.lng], { radius: CAPTURE_RADIUS_M, color: "#d5481f", weight: 2, fillOpacity: 0.2 }).addTo(map);
+    });
+    map.fitBounds(SITES.map((s) => [s.lat, s.lng]), { padding: [30, 30] });
+    return () => map.remove();
+  }, []);
+  return (
+    <>
+      <div ref={elRef} className="sitemap" role="img" aria-label="Map of the capture locations" />
+      <div className="tools">
+        {SITES.map((s, i) => (
+          <button key={s.name} onClick={() => mapRef.current?.flyTo([s.lat, s.lng], 18)}>
+            {i + 1}. {s.name}
+          </button>
+        ))}
+      </div>
+    </>
+  );
+}
+
+// Shared by the drawing page and the reduced "open the pendant's page" view.
+function LocationsPanel() {
+  return (
+    <div className="panel">
+      <div className="panel-tag">Locations</div>
+      <div className="caption">
+        Visit these spots with your pendant. On its Capture screen, press MID
+        when you're inside the red ring (about {CAPTURE_RADIUS_M} m).
+      </div>
+      <SiteMap />
+    </div>
+  );
 }
 
 const css = `
@@ -291,6 +354,11 @@ const css = `
   pre { background:var(--ink); color:var(--console); padding:10px; height:130px; overflow:auto;
     font-size:12px; margin:0; white-space:pre-wrap; word-break:break-word;
     border:2px solid var(--ink); }
+  /* Capture-locations map. z-index:0 keeps Leaflet's panes under the page UI. */
+  .sitemap { height:300px; width:100%; border:2px solid var(--ink); position:relative; z-index:0; }
+  .pin span { display:flex; align-items:center; justify-content:center; width:26px; height:26px;
+    background:var(--accent); color:#fff; border:2px solid var(--ink); box-shadow:2px 2px 0 var(--ink);
+    font:700 13px 'IBM Plex Mono',monospace; }
   @media (max-width:560px) {
     h1 { font-size:25px; }
     .wrap { padding-top:20px; }
@@ -838,6 +906,8 @@ export default function App() {
                 ← Back to the drawing page
               </button>
             )}
+
+            <LocationsPanel />
           </>
         ) : (
           <>
@@ -1105,6 +1175,8 @@ export default function App() {
             </div>
           </div>
         </div>
+
+        <LocationsPanel />
 
         <div className="lbl" style={{ margin: "20px 0 6px" }}>Log</div>
         <pre>{log.join("\n")}</pre>

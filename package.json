@@ -9,6 +9,7 @@
     "build": "vite build"
   },
   "dependencies": {
+    "leaflet": "^1.9.4",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
